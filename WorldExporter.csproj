@@ -1,0 +1,63 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net7.0</TargetFramework>
+    <ModInfoFile>modinfo.json</ModInfoFile>
+    <ModName>WorldExporter</ModName>
+    <Version>0.1.0</Version>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <OutputPath>bin\$(Configuration)\Mods\$(ModName)\</OutputPath>
+    <ZipOutputPath>bin\$(Configuration)\Mods\$(ModName)-v$(Version).zip</ZipOutputPath>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+  
+  <ItemGroup>
+    <PackageReference Include="QuantumConcepts.Formats.STL" Version="2.0.1">
+      <IncludeAssets>all</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="VintagestoryAPI">
+      <HintPath>$(VINTAGE_STORY)/VintagestoryAPI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="VSEssentials">
+      <HintPath>$(VINTAGE_STORY)/Mods/VSEssentials.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="VintagestoryLib">
+      <HintPath>$(VINTAGE_STORY)/VintagestoryLib.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="modinfo.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="modicon.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <!-- Copy NuGet DLLs to native folder -->
+  <Target Name="CopyDependencies" AfterTargets="Build">
+    <ItemGroup>
+      <!-- Get all locally copied references -->
+      <NuGetLibs Include="$(OutputPath)STLdotNET.dll" />
+    </ItemGroup>
+
+    <!-- Make sure the native folder exists -->
+    <MakeDir Directories="$(OutputPath)native" />
+
+    <Move SourceFiles="@(NuGetLibs)" DestinationFolder="$(OutputPath)native/"/>
+  </Target>
+
+  <!-- Only zip if Release build -->
+  <Target Name="ZipMod" AfterTargets="CopyDependencies" Condition="'$(Configuration)' == 'Release'">
+    <Exec Command="powershell -NoLogo -NoProfile -Command &quot;Compress-Archive -Path '$(OutputPath)*' -DestinationPath '$(ZipOutputPath)' -Force&quot;" />
+    <RemoveDir Directories="$(OutputPath)" />
+  </Target>
+
+</Project>

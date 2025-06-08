@@ -1,0 +1,14 @@
+{
+  "type": "code",
+  "modid": "worldexporter",
+  "name": "WorldExporter",
+  "authors": [
+    "_Durus_"
+  ],
+  "description": "Adds the ability to export the world in 3D file formats.",
+  "version": "0.1.0",
+  "dependencies": {
+    "game": ""
+  },
+  "side":  "client"
+}
