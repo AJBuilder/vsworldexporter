@@ -1,17 +1,18 @@
-﻿using Vintagestory.API.Client;
-using Vintagestory.API.Common;
-using Vintagestory.API.Config;
-using Vintagestory.API.Server;
-using QuantumConcepts.Formats.StereoLithography;
+﻿using QuantumConcepts.Formats.StereoLithography;
 using System;
-using System.Collections.Generic;
-using Vintagestory.API.MathTools;
-using System.IO;
-using Vintagestory.API.Common.Entities;
 using System.Collections.Concurrent;
-using System.Threading;
-using Vintagestory.GameContent;
+using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Threading;
+using Vintagestory.API.Client;
+using Vintagestory.API.Common;
+using Vintagestory.API.Common.Entities;
+using Vintagestory.API.Config;
+using Vintagestory.API.MathTools;
+using Vintagestory.API.Server;
+using Vintagestory.GameContent;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 
 //[assembly: ModInfo("WorldExporter", "worldexporter",
 //                    Authors = new string[] { "Durus" },
@@ -21,11 +22,11 @@ using System.Linq;
 namespace WorldExporter
 {public class WorldExporterModSystem : ModSystem
     {
-        static ICoreClientAPI client_api;
+        static ICoreClientAPI capi;
 
         static string logging_prefix = "[WorldExporter]";
 
-        string output_dir = "C:\\Users\\adama\\Documents\\world_exports";
+        Config config;
 
         public WorldExporterModSystem()
         {
@@ -48,123 +49,14 @@ namespace WorldExporter
         {
             return side == EnumAppSide.Client;
         }
-        private static void WorldExporterLog(string message)
+        internal static void WorldExporterLog(string message)
         {
-            client_api.Logger.Chat($"{logging_prefix} {message}");
+            capi.Logger.Chat($"{logging_prefix} {message}");
         }
-        private static void WorldExporterChat(string message)
+        internal static void WorldExporterChat(string message)
         {
-            client_api.World.Player.ShowChatNotification($"{logging_prefix} {message}");
+            capi.World.Player.ShowChatNotification($"{logging_prefix} {message}");
         }
-        public class TerrainMeshPool : ITerrainMeshPool
-        {
-            public IList<MeshData> meshes = new List<MeshData>();
-            ICoreClientAPI client_api;
-            ModelTransform transform;
-            public TerrainMeshPool(ICoreClientAPI api)
-            {
-                client_api = api;
-                transform = new ModelTransform();
-                transform.EnsureDefaultValues();
-            }
-
-            void ITerrainMeshPool.AddMeshData(MeshData mesh, int lodLevel = 0)
-            {
-                if (mesh == null) return;
-                mesh = mesh.Clone();
-                if (transform != null)
-                {
-                    mesh.ModelTransform(transform);
-                }
-                meshes.Add(mesh);
-            }
-
-            void ITerrainMeshPool.AddMeshData(MeshData mesh, float[] tfMatrix, int lodLevel = 0)
-            {
-                if (mesh == null) return;
-                mesh = mesh.Clone();
-                mesh.MatrixTransform(tfMatrix);
-                if (transform != null)
-                {
-                    mesh.ModelTransform(transform);
-                }
-                meshes.Add(mesh);
-            }
-
-            void ITerrainMeshPool.AddMeshData(MeshData mesh, ColorMapData colorMapData, int lodLevel = 0)
-            {
-                ((ITerrainMeshPool)this).AddMeshData(mesh, lodLevel);
-            }
-
-            public void AddCuboid(IClientWorldAccessor world, Cuboidi cuboidi)
-            {
-                this.AddCuboid(world, cuboidi.Start.AsBlockPos, cuboidi.End.AsBlockPos);
-            }
-
-            public void AddCuboid(IClientWorldAccessor world, BlockPos start_pos, BlockPos end_pos)
-            {
-
-                // Tesselating entities is done in it's own thread, so we can start them all first, then wait for them to all finish at the end.
-                //Entity[] entities = world.GetEntitiesInsideCuboid(start_pos, end_pos);
-                //CountdownEvent entity_tesselation_countdown = new CountdownEvent(entities.Length);
-                //foreach (Entity entity in entities)
-                //{
-                //    if (entity.Properties.Client.Renderer is EntityShapeRenderer renderer)
-                //    {
-                //        renderer.TesselateShape((mesh) =>
-                //        {
-                //            try
-                //            {
-                //                ((ITerrainMeshPool)this).AddMeshData(mesh);
-                //            }
-                //            finally
-                //            {
-                //                entity_tesselation_countdown.Signal();
-                //            }
-                //        });
-                //    }
-                //    else
-                //    {
-                //        entity_tesselation_countdown.Signal();
-                //    }
-                //}
-
-                world.BlockAccessor.WalkBlocks(start_pos, end_pos, (block, x, y, z) =>
-                {
-                    try
-                    {
-                        transform.Translation = new Vec3f((new BlockPos(x, y, z) - start_pos).AsVec3i);
-                        // If its a block entity, tesselate it and add.
-                        var block_entity = world.BlockAccessor.GetBlockEntity(new BlockPos(x, y, z));
-                        if (block_entity != null)
-                        {
-                            // Supposedly, it is not thread safe to use the main thread tesselator?
-                            // We'll use it anyway? Perhaps as long as we block the main thread?
-                            bool skip_default = block_entity.OnTesselation(this, client_api.Tesselator);
-
-                            // If we aren't adding the default mesh, continue to next block.
-                            if (skip_default) return;
-                        }
-
-                        // Get the base/cached/default mesh
-                        MeshData mesh = client_api.TesselatorManager.GetDefaultBlockMesh(block);
-                        if (mesh != null)
-                        {
-                            ((ITerrainMeshPool)this).AddMeshData(mesh);
-                        }
-                    }
-                    catch
-                    {
-                        WorldExporterChat($"Failed to get mesh of {block.Code} at {x},{y},{z}");
-                    }
-                });
-
-                // Wait for all entites to be finished
-                //entity_tesselation_countdown.Wait(5000);
-            }
-
-        }
-
         void WriteMeshToSTL(IEnumerable<MeshData> meshes, FileStream fs)
         {
             WorldExporterChat($"Processing {meshes.Count()} meshes into facets...");
@@ -236,27 +128,76 @@ namespace WorldExporter
                                                           center.dimension);
             ExportCuboid(world, start, end);
         }
-        public void ExportCuboid(IClientWorldAccessor world, BlockPos start, BlockPos end)
+        public bool ExportCuboid(IClientWorldAccessor world, BlockPos start, BlockPos end)
         {
-            Cuboidi volume_to_export = new Cuboidi(start, end);
-            TerrainMeshPool mesh_pool = new TerrainMeshPool(client_api);
-            mesh_pool.AddCuboid(world, volume_to_export);
+            if (!Path.Exists(config.outputDirectory))
+            {
+                WorldExporterChat($"Output directory \"{config.outputDirectory}\" does not exist. Run \".wexporter director PATH\" to set.");
+                return false;
+            }
+
+            TerrainMeshPool mesh_pool;
+            try
+            {
+                Cuboidi volume_to_export = new Cuboidi(start, end);
+                mesh_pool = new TerrainMeshPool(capi);
+                mesh_pool.AddCuboid(world, volume_to_export);
+            }
+            catch (Exception e)
+            {
+                var error = "Failed to generate mesh.";
+                WorldExporterChat(error + " See log for more details.");
+                WorldExporterLog(error + $" Exception: {e}");
+                return false;
+
+            }
 
 
             string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-            string filename = $"world_export_{timestamp}.stl";
-            var output_file = Path.Combine(output_dir, filename);
-            using (FileStream fs = new FileStream(output_file, FileMode.Create, FileAccess.Write))
+            var output_file = Path.Combine(config.outputDirectory, $"world_export_{timestamp}.stl");
+            try
             {
-                WriteMeshToSTL(mesh_pool.meshes, fs);
+                using (FileStream fs = new FileStream(output_file, FileMode.Create, FileAccess.Write))
+                {
+                    WriteMeshToSTL(mesh_pool.meshes, fs);
+                }
             }
+            catch (Exception e)
+            {
+                var error = $"Failed to export to \"{config.outputDirectory}\".";
+                WorldExporterChat(error + " See log for more details.");
+                WorldExporterLog(error + $" Exception: {e}");
+                return false;
+            }
+            return true;
         }
 
 
 
         public override void StartClientSide(ICoreClientAPI api)
         {
-            client_api = api;
+            base.StartClientSide(api);
+            capi = api;
+
+            // Load config
+            try
+            {
+                config = api.LoadModConfig<Config>("worldexporter.json");
+                if (config == null)
+                {
+                    config = new Config();
+                }
+                //Save a copy of the mod config.
+                api.StoreModConfig<Config>(config, "worldexporter.json");
+            }
+            catch (Exception e)
+            {
+                WorldExporterLog($"Encountered an error when loading config! Loading default settings instead. Exception: {e}");
+                config = new Config();
+            }
+
+
+            // Build commands
             api.ChatCommands.Create("wexporter")
                 .BeginSubCommand("export")
                     .BeginSubCommand("cube")
@@ -293,8 +234,27 @@ namespace WorldExporter
                             })
                         .EndSubCommand()
                     .EndSubCommand()
-                .EndSubCommand();
-            base.StartClientSide(api);
+                .EndSubCommand()
+                    .BeginSubCommand("directory")
+                        .WithDescription("Show or set the output directory. This can also be changed in the \"worldexporter.json\" located in the installs ModConfig folder.")
+                        .RequiresPrivilege(Privilege.chat)
+                        .WithArgs(new ICommandArgumentParser[] { new StringArgParser("path", false)})
+                        .HandleWith((args) =>
+                        {
+                            var path = args[0];
+                            if (path == null)
+                            {
+                                WorldExporterChat($"Current output directory: \"{config.outputDirectory}\"");
+                            }
+                            else
+                            {
+                                config.outputDirectory = (string)path;
+                                WorldExporterChat($"Set output directory to \"{path}\"");
+                                api.StoreModConfig<Config>(config, "worldexporter.json");
+                            }
+                            return TextCommandResult.Success();
+                        })
+                    .EndSubCommand();
         }
     }
 }

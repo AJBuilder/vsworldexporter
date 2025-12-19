@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net7.0</TargetFramework>
+    <TargetFramework>net8.0</TargetFramework>
     <ModInfoFile>modinfo.json</ModInfoFile>
     <ModName>WorldExporter</ModName>
     <Version>0.1.0</Version>
@@ -18,6 +18,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Reference Include="protobuf-net">
+      <HintPath>..\..\..\AppData\Roaming\Vintagestory\Lib\protobuf-net.dll</HintPath>
+    </Reference>
     <Reference Include="VintagestoryAPI">
       <HintPath>$(VINTAGE_STORY)/VintagestoryAPI.dll</HintPath>
       <Private>false</Private>
@@ -51,7 +54,7 @@
     <!-- Make sure the native folder exists -->
     <MakeDir Directories="$(OutputPath)native" />
 
-    <Move SourceFiles="@(NuGetLibs)" DestinationFolder="$(OutputPath)native/"/>
+    <Move SourceFiles="@(NuGetLibs)" DestinationFolder="$(OutputPath)native/" />
   </Target>
 
   <!-- Only zip if Release build -->
