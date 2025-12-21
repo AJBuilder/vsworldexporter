@@ -61,55 +61,58 @@ namespace WorldExporter
                 capi.World.Player.ShowChatNotification($"{logging_prefix} {message}");
             }, $"world exporter chat: {message}");
         }
-        static void WriteMeshToSTL(MeshData mesh, FileStream fs)
+        static void WriteMeshToSTL(IEnumerable<MeshData> meshes, FileStream fs)
         {
             WorldExporterChat($"Processing mesh into facets...");
             STLDocument document = new STLDocument();
             int facets_added = 0;
-            if (mesh.mode != EnumDrawMode.Triangles)
+            foreach (MeshData mesh in meshes)
             {
-                WorldExporterLog("Draw mode is not triangles");
-                return;
-            }
+                if (mesh.mode != EnumDrawMode.Triangles)
+                {
+                    WorldExporterLog("Draw mode is not triangles");
+                    return;
+                }
 
 
-            // Convert all vertices since we don't want to be duplicating data
-            // Potential for optimization: only create one when needed, but cache it for later.
-            try
-            {
-                Vertex[] vertices = new Vertex[mesh.VerticesCount];
+                // Convert all vertices since we don't want to be duplicating data
+                // Potential for optimization: only create one when needed, but cache it for later.
                 try
                 {
-                    for (var v = 0; v < mesh.VerticesCount; v++)
-                    {
-                        vertices[v] = new Vertex(mesh.xyz[v * 3], mesh.xyz[v * 3 + 1], mesh.xyz[v * 3 + 2]);
-                    }
-                }
-                catch
-                {
-                    WorldExporterLog("Failed to read vertices.");
-                }
-
-                var facets = new Facet[(int)Math.Ceiling((float)(mesh.IndicesCount / 3))];
-                for (var i = 0; i < mesh.IndicesCount; i += 3)
-                {
+                    Vertex[] vertices = new Vertex[mesh.VerticesCount];
                     try
                     {
-                        facets[i/3] = new Facet(null, new Vertex[] {vertices[mesh.Indices[i]],
-                                                                        vertices[mesh.Indices[i+1]],
-                                                                        vertices[mesh.Indices[i+2]] }, 0);
-                        facets_added++;
+                        for (var v = 0; v < mesh.VerticesCount; v++)
+                        {
+                            vertices[v] = new Vertex(mesh.xyz[v * 3], mesh.xyz[v * 3 + 1], mesh.xyz[v * 3 + 2]);
+                        }
                     }
                     catch
                     {
-                        WorldExporterLog("Failed to create facet.");
+                        WorldExporterLog("Failed to read vertices.");
                     }
+
+                    var facets = new Facet[(int)Math.Ceiling((float)(mesh.IndicesCount / 3))];
+                    for (var i = 0; i < mesh.IndicesCount; i += 3)
+                    {
+                        try
+                        {
+                            facets[i / 3] = new Facet(null, new Vertex[] {vertices[mesh.Indices[i]],
+                                                                            vertices[mesh.Indices[i+1]],
+                                                                            vertices[mesh.Indices[i+2]] }, 0);
+                            facets_added++;
+                        }
+                        catch
+                        {
+                            WorldExporterLog("Failed to create facet.");
+                        }
+                    }
+                    document.AppendFacets(facets);
                 }
-                document.AppendFacets(facets);
-            }
-            catch (Exception e)
-            {
-                WorldExporterLog("Failed to add facets to document.");
+                catch (Exception e)
+                {
+                    WorldExporterLog("Failed to add facets to document.");
+                }
             }
 
             WorldExporterChat($"Created {facets_added} facets. Writing to document at {fs.Name}...");
@@ -162,7 +165,7 @@ namespace WorldExporter
                 {
                     using (FileStream fs = new FileStream(output_file, FileMode.Create, FileAccess.Write))
                     {
-                        WriteMeshToSTL(mesh_pool.meshPool, fs);
+                        WriteMeshToSTL(mesh_pool.meshes, fs);
                     }
                 });
                 task.Start();

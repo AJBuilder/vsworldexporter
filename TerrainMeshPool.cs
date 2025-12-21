@@ -12,7 +12,7 @@ namespace WorldExporter
 
     public class TerrainMeshPool : ITerrainMeshPool
     {
-        public MeshData meshPool = new MeshData(1000, 1000, true, true, true, true);
+        public IList<MeshData> meshes = new List<MeshData>();
         ICoreClientAPI client_api;
         ModelTransform transform;
         public TerrainMeshPool(ICoreClientAPI api)
@@ -30,7 +30,7 @@ namespace WorldExporter
             {
                 mesh.ModelTransform(transform);
             }
-            meshPool.AddMeshData(mesh);
+            meshes.Add(mesh);
         }
 
         public void AddMeshData(MeshData mesh, float[] tfMatrix, int lodLevel = 0)
@@ -42,7 +42,7 @@ namespace WorldExporter
             {
                 mesh.ModelTransform(transform);
             }
-            meshPool.AddMeshData(mesh);
+            meshes.Add(mesh);
         }
 
         public void AddMeshData(MeshData mesh, ColorMapData colorMapData, int lodLevel = 0)
