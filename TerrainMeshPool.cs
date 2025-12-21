@@ -87,6 +87,10 @@ namespace WorldExporter
             {
                 try
                 {
+                    // Not sure why, but in 1.21.x air blocks now have a default cube mesh?
+                    if (block.FirstCodePart() == "air") return;
+
+
                     transform.Translation = new Vec3f((new BlockPos(x, y, z) - start_pos).AsVec3i);
                     // If its a block entity, tesselate it and add.
                     var block_entity = world.BlockAccessor.GetBlockEntity(new BlockPos(x, y, z));
