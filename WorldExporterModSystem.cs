@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
@@ -55,60 +56,60 @@ namespace WorldExporter
         }
         internal static void WorldExporterChat(string message)
         {
-            capi.World.Player.ShowChatNotification($"{logging_prefix} {message}");
+            capi.Event.EnqueueMainThreadTask(() =>
+            {
+                capi.World.Player.ShowChatNotification($"{logging_prefix} {message}");
+            }, $"world exporter chat: {message}");
         }
-        void WriteMeshToSTL(IEnumerable<MeshData> meshes, FileStream fs)
+        static void WriteMeshToSTL(MeshData mesh, FileStream fs)
         {
-            WorldExporterChat($"Processing {meshes.Count()} meshes into facets...");
+            WorldExporterChat($"Processing mesh into facets...");
             STLDocument document = new STLDocument();
             int facets_added = 0;
-            foreach (MeshData mesh in meshes)
+            if (mesh.mode != EnumDrawMode.Triangles)
             {
-                if (mesh.mode != EnumDrawMode.Triangles)
-                {
-                    WorldExporterLog("Draw mode is not triangles");
-                    return;
-                }
+                WorldExporterLog("Draw mode is not triangles");
+                return;
+            }
 
 
-                // Convert all vertices since we don't want to be duplicating data
-                // Potential for optimization: only create one when needed, but cache it for later.
+            // Convert all vertices since we don't want to be duplicating data
+            // Potential for optimization: only create one when needed, but cache it for later.
+            try
+            {
+                Vertex[] vertices = new Vertex[mesh.VerticesCount];
                 try
                 {
-                    Vertex[] vertices = new Vertex[mesh.VerticesCount];
+                    for (var v = 0; v < mesh.VerticesCount; v++)
+                    {
+                        vertices[v] = new Vertex(mesh.xyz[v * 3], mesh.xyz[v * 3 + 1], mesh.xyz[v * 3 + 2]);
+                    }
+                }
+                catch
+                {
+                    WorldExporterLog("Failed to read vertices.");
+                }
+
+                var facets = new Facet[(int)Math.Ceiling((float)(mesh.IndicesCount / 3))];
+                for (var i = 0; i < mesh.IndicesCount; i += 3)
+                {
                     try
                     {
-                        for (var v = 0; v < mesh.VerticesCount; v++)
-                        {
-                            vertices[v] = new Vertex(mesh.xyz[v * 3], mesh.xyz[v * 3 + 1], mesh.xyz[v * 3 + 2]);
-                        }
+                        facets[i/3] = new Facet(null, new Vertex[] {vertices[mesh.Indices[i]],
+                                                                        vertices[mesh.Indices[i+1]],
+                                                                        vertices[mesh.Indices[i+2]] }, 0);
+                        facets_added++;
                     }
                     catch
                     {
-                        WorldExporterLog("Failed to read vertices.");
+                        WorldExporterLog("Failed to create facet.");
                     }
-
-                    var facets = new Facet[(int)Math.Ceiling((float)(mesh.IndicesCount / 3))];
-                    for (var i = 0; i < mesh.IndicesCount; i += 3)
-                    {
-                        try
-                        {
-                            facets[i/3] = new Facet(null, new Vertex[] {vertices[mesh.Indices[i]],
-                                                                          vertices[mesh.Indices[i+1]],
-                                                                          vertices[mesh.Indices[i+2]] }, 0);
-                            facets_added++;
-                        }
-                        catch
-                        {
-                            WorldExporterLog("Failed to create facet.");
-                        }
-                    }
-                    document.AppendFacets(facets);
                 }
-                catch (Exception e)
-                {
-                    WorldExporterLog("Failed to add facets to document.");
-                }
+                document.AppendFacets(facets);
+            }
+            catch (Exception e)
+            {
+                WorldExporterLog("Failed to add facets to document.");
             }
 
             WorldExporterChat($"Created {facets_added} facets. Writing to document at {fs.Name}...");
@@ -157,10 +158,15 @@ namespace WorldExporter
             var output_file = Path.Combine(config.outputDirectory, $"world_export_{timestamp}.stl");
             try
             {
-                using (FileStream fs = new FileStream(output_file, FileMode.Create, FileAccess.Write))
+                var task = new Task(() =>
                 {
-                    WriteMeshToSTL(mesh_pool.meshes, fs);
-                }
+                    using (FileStream fs = new FileStream(output_file, FileMode.Create, FileAccess.Write))
+                    {
+                        WriteMeshToSTL(mesh_pool.meshPool, fs);
+                    }
+                });
+                task.Start();
+                task.Wait(10000);
             }
             catch (Exception e)
             {
@@ -244,15 +250,21 @@ namespace WorldExporter
                             var path = args[0];
                             if (path == null)
                             {
-                                WorldExporterChat($"Current output directory: \"{config.outputDirectory}\"");
+                                return TextCommandResult.Success($"Current output directory: \"{config.outputDirectory}\"");
                             }
                             else
                             {
-                                config.outputDirectory = (string)path;
-                                WorldExporterChat($"Set output directory to \"{path}\"");
-                                api.StoreModConfig<Config>(config, "worldexporter.json");
+                                if (Directory.Exists((string)path))
+                                {
+                                    config.outputDirectory = (string)path;
+                                    api.StoreModConfig<Config>(config, "worldexporter.json");
+                                    return TextCommandResult.Success($"Set output directory to \"{path}\".");
+                                }
+                                else
+                                {
+                                    return TextCommandResult.Success($"Directory does not exist.");
+                                }
                             }
-                            return TextCommandResult.Success();
                         })
                     .EndSubCommand();
         }

@@ -12,7 +12,7 @@ namespace WorldExporter
 
     public class TerrainMeshPool : ITerrainMeshPool
     {
-        public IList<MeshData> meshes = new List<MeshData>();
+        public MeshData meshPool = new MeshData(1000, 1000, true, true, true, true);
         ICoreClientAPI client_api;
         ModelTransform transform;
         public TerrainMeshPool(ICoreClientAPI api)
@@ -22,7 +22,7 @@ namespace WorldExporter
             transform.EnsureDefaultValues();
         }
 
-        void ITerrainMeshPool.AddMeshData(MeshData mesh, int lodLevel = 0)
+        public void AddMeshData(MeshData mesh, int lodLevel = 0)
         {
             if (mesh == null) return;
             mesh = mesh.Clone();
@@ -30,10 +30,10 @@ namespace WorldExporter
             {
                 mesh.ModelTransform(transform);
             }
-            meshes.Add(mesh);
+            meshPool.AddMeshData(mesh);
         }
 
-        void ITerrainMeshPool.AddMeshData(MeshData mesh, float[] tfMatrix, int lodLevel = 0)
+        public void AddMeshData(MeshData mesh, float[] tfMatrix, int lodLevel = 0)
         {
             if (mesh == null) return;
             mesh = mesh.Clone();
@@ -42,12 +42,12 @@ namespace WorldExporter
             {
                 mesh.ModelTransform(transform);
             }
-            meshes.Add(mesh);
+            meshPool.AddMeshData(mesh);
         }
 
-        void ITerrainMeshPool.AddMeshData(MeshData mesh, ColorMapData colorMapData, int lodLevel = 0)
+        public void AddMeshData(MeshData mesh, ColorMapData colorMapData, int lodLevel = 0)
         {
-            ((ITerrainMeshPool)this).AddMeshData(mesh, lodLevel);
+            this.AddMeshData(mesh, lodLevel);
         }
 
         public void AddCuboid(IClientWorldAccessor world, Cuboidi cuboidi)
@@ -104,7 +104,7 @@ namespace WorldExporter
                     MeshData mesh = client_api.TesselatorManager.GetDefaultBlockMesh(block);
                     if (mesh != null)
                     {
-                        ((ITerrainMeshPool)this).AddMeshData(mesh);
+                        this.AddMeshData(mesh);
                     }
                 }
                 catch
