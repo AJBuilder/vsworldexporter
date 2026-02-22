@@ -54,12 +54,52 @@ namespace WorldExporter
             }, $"world exporter chat: {message}");
         }
 
-        static void WriteMeshToSTL(IEnumerable<MeshData> meshes, FileStream fs)
+        static void WriteToSTL(IClientWorldAccessor world, BlockPos start, BlockPos end, string outputPath)
         {
+            // Create local mesh pool
+            TerrainMeshPool mesh_pool = new TerrainMeshPool(capi);
+
+            // Walk blocks and gather meshes
+            world.BlockAccessor.WalkBlocks(start, end, (block, x, y, z) =>
+            {
+                try
+                {
+                    // Skip air blocks (1.21.x air has default cube mesh)
+                    if (block.FirstCodePart() == "air") return;
+
+                    // Set transform relative to start position
+                    mesh_pool.SetTranslation(new Vec3f((new BlockPos(x, y, z) - start).AsVec3i));
+
+                    // Handle block entities
+                    var block_entity = world.BlockAccessor.GetBlockEntity(new BlockPos(x, y, z));
+                    if (block_entity != null)
+                    {
+                        // Supposedly, it is not thread safe to use the main thread tesselator?
+                        // We'll use it anyway? Perhaps as long as we block the main thread?
+                        bool skip_default = block_entity.OnTesselation(mesh_pool, capi.Tesselator);
+
+                        // If we aren't adding the default mesh, continue to next block.
+                        if (skip_default) return;
+                    }
+
+                    // Get and add the default mesh
+                    MeshData mesh = capi.TesselatorManager.GetDefaultBlockMesh(block);
+                    if (mesh != null)
+                    {
+                        mesh_pool.AddMeshData(mesh);
+                    }
+                }
+                catch
+                {
+                    WorldExporterChat($"Failed to get mesh of {block.Code} at {x},{y},{z}");
+                }
+            });
+
+            // Convert meshes to STL facets
             WorldExporterChat($"Processing mesh into facets...");
             STLDocument document = new STLDocument();
             int facets_added = 0;
-            foreach (MeshData mesh in meshes)
+            foreach (MeshData mesh in mesh_pool.meshes)
             {
                 if (mesh.mode != EnumDrawMode.Triangles)
                 {
@@ -105,12 +145,16 @@ namespace WorldExporter
                 }
             }
 
-            WorldExporterChat($"Created {facets_added} facets. Writing to document at {fs.Name}...");
-            document.WriteText(fs);
+            // Write STL file
+            WorldExporterChat($"Created {facets_added} facets. Writing to document at {outputPath}...");
+            using (FileStream fs = new FileStream(outputPath, FileMode.Create, FileAccess.Write))
+            {
+                document.WriteText(fs);
+            }
             WorldExporterChat("Done!");
         }
 
-        static void WriteToOBJ(IList<MeshData> meshes, IClientWorldAccessor world, BlockPos start, BlockPos end, string baseOutputPath)
+        static void WriteToOBJ(IClientWorldAccessor world, BlockPos start, BlockPos end, string baseOutputPath)
         {
             string objPath = baseOutputPath + ".obj";
             string mtlPath = baseOutputPath + ".mtl";
@@ -119,45 +163,69 @@ namespace WorldExporter
             string texturesDir = Path.Combine(outputDir, "textures");
             Directory.CreateDirectory(texturesDir);
 
-            // Build texture position to asset location mapping
-            var texturePosToAsset = new Dictionary<(float, float, float, float), AssetLocation>();
+            // Create local mesh pool
+            TerrainMeshPool mesh_pool = new TerrainMeshPool(capi);
 
+            // Helper function: Find texture position for given UV coordinates
+            (float x1, float y1, float x2, float y2, int subId) FindTexturePosition(int atlasTextureId, float uvX, float uvY)
+            {
+                for (int subId = 0; subId < capi.BlockTextureAtlas.Positions.Length; subId++)
+                {
+                    var pos = capi.BlockTextureAtlas.Positions[subId];
+                    if (pos == null || pos.atlasTextureId != atlasTextureId)
+                        continue;
+
+                    // Check if UV falls within this texture's rectangle
+                    if (uvX >= pos.x1 && uvX <= pos.x2 &&
+                        uvY >= pos.y1 && uvY <= pos.y2)
+                    {
+                        return (pos.x1, pos.y1, pos.x2, pos.y2, subId);
+                    }
+                }
+                return (-1, -1, -1, -1, -1);  // Not found
+            }
+
+            int blocksProcessed = 0;
+
+            // Single pass: gather meshes AND build texture mapping
             world.BlockAccessor.WalkBlocks(start, end, (block, x, y, z) =>
             {
                 if (block.FirstCodePart() == "air") return;
+                blocksProcessed++;
 
-                if (block.Textures != null)
+                // Mesh gathering
+                bool should_add_default_mesh = true;
+                try
                 {
-                    foreach (var kvp in block.Textures)
-                    {
-                        try
-                        {
-                            BakedCompositeTexture baked = kvp.Value?.Baked;
-                            if (baked == null) continue;
+                    mesh_pool.SetTranslation(new Vec3f((new BlockPos(x, y, z) - start).AsVec3i));
 
-                            var variants = baked.BakedVariants ?? new[] { baked };
-                            foreach (BakedCompositeTexture variant in variants)
-                            {
-                                int subId = variant.TextureSubId;
-                                if (subId < 0 || subId >= capi.BlockTextureAtlas.Positions.Length) continue;
-                                TextureAtlasPosition pos = capi.BlockTextureAtlas.Positions[subId];
-                                if (pos == null) continue;
-                                var key = (pos.x1, pos.y1, pos.x2, pos.y2);
-                                if (!texturePosToAsset.ContainsKey(key))
-                                {
-                                    AssetLocation loc = (variant.TextureFilenames?.Length > 0)
-                                        ? variant.TextureFilenames[0]
-                                        : kvp.Value.Base;
-                                    texturePosToAsset[key] = loc;
-                                }
-                            }
-                        }
-                        catch { }
+                    var block_entity = world.BlockAccessor.GetBlockEntity(new BlockPos(x, y, z));
+                    if (block_entity != null)
+                    {
+                        // Supposedly, it is not thread safe to use the main thread tesselator?
+                        // We'll use it anyway? Perhaps as long as we block the main thread?
+                        should_add_default_mesh = !block_entity.OnTesselation(mesh_pool, capi.Tesselator);
                     }
+
+                    if (should_add_default_mesh)
+                    {
+                        MeshData mesh = capi.TesselatorManager.GetDefaultBlockMesh(block);
+                        if (mesh != null)
+                        {
+                            mesh_pool.AddMeshData(mesh);
+                        }
+                    }
+                }
+                catch
+                {
+                    WorldExporterChat($"Failed to get mesh of {block.Code} at {x},{y},{z}");
                 }
             });
 
-            var usedSubIds = new HashSet<int>();
+            WorldExporterLog($"Blocks processed: {blocksProcessed}");
+
+            // Track used textures by position coordinates (x1,y1,x2,y2,subId)
+            var usedTextures = new HashSet<(float, float, float, float, int)>();
             var vec4 = new Vec4f();
 
             using var objWriter = new StreamWriter(objPath);
@@ -169,7 +237,7 @@ namespace WorldExporter
             // a single running offset covers all three index types.
             int indexBase = 1;
 
-            foreach (MeshData mesh in meshes)
+            foreach (MeshData mesh in mesh_pool.meshes)
             {
                 if (mesh == null) continue;
 
@@ -198,17 +266,23 @@ namespace WorldExporter
                         byte texIndice = mesh.TextureIndices[faceIdx];
                         if (texIndice < mesh.TextureIds.Length)
                         {
-                            int subId = mesh.TextureIds[texIndice];
-                            TextureAtlasPosition texPos = capi.BlockTextureAtlas.Positions[subId];
-                            if (texPos != null)
+                            int atlasTextureId = mesh.TextureIds[texIndice];
+                            float uvX = mesh.Uv[i * 2];
+                            float uvY = mesh.Uv[i * 2 + 1];
+
+                            // Find texture position containing this UV
+                            var (x1, y1, x2, y2, subId) = FindTexturePosition(atlasTextureId, uvX, uvY);
+
+                            if (subId >= 0)
                             {
-                                float atlasW = texPos.x2 - texPos.x1;
-                                float atlasH = texPos.y2 - texPos.y1;
-                                float u = atlasW > 0f ? (mesh.Uv[i * 2] - texPos.x1) / atlasW : 0f;
-                                // Flip V: OBJ has V=0 at bottom, VS textures have V=0 at top
-                                float v = atlasH > 0f ? 1f - (mesh.Uv[i * 2 + 1] - texPos.y1) / atlasH : 0f;
+                                // Calculate local UV (within this texture)
+                                float atlasW = x2 - x1;
+                                float atlasH = y2 - y1;
+                                float u = atlasW > 0f ? (uvX - x1) / atlasW : 0f;
+                                float v = atlasH > 0f ? 1f - (uvY - y1) / atlasH : 0f;  // flip for OBJ
+
                                 objWriter.WriteLine(FormattableString.Invariant($"vt {u:G6} {v:G6}"));
-                                usedSubIds.Add(subId);
+                                usedTextures.Add((x1, y1, x2, y2, subId));
                                 continue;
                             }
                         }
@@ -238,7 +312,7 @@ namespace WorldExporter
                     int vi1 = (int)mesh.Indices[i + 1];
                     int vi2 = (int)mesh.Indices[i + 2];
 
-                    int subId = -1;
+                    int textureSubId = -1;
                     if (hasUvs)
                     {
                         int faceIdx = vi0 / mesh.VerticesPerFace;
@@ -246,22 +320,29 @@ namespace WorldExporter
                         {
                             byte texIndice = mesh.TextureIndices[faceIdx];
                             if (texIndice < mesh.TextureIds.Length)
-                                subId = mesh.TextureIds[texIndice];
+                            {
+                                int atlasTextureId = mesh.TextureIds[texIndice];
+                                float uvX = mesh.Uv[vi0 * 2];
+                                float uvY = mesh.Uv[vi0 * 2 + 1];
+
+                                var (_, _, _, _, subId) = FindTexturePosition(atlasTextureId, uvX, uvY);
+                                textureSubId = subId;  // Only used for material naming (mat_XXX)
+                            }
                         }
                     }
 
-                    if (!materialGroups.TryGetValue(subId, out var list))
+                    if (!materialGroups.TryGetValue(textureSubId, out var list))
                     {
                         list = new List<(int, int, int)>();
-                        materialGroups[subId] = list;
+                        materialGroups[textureSubId] = list;
                     }
                     list.Add((vi0, vi1, vi2));
                 }
 
-                foreach (var (subId, triangles) in materialGroups)
+                foreach (var (textureSubId, triangles) in materialGroups)
                 {
-                    if (subId >= 0)
-                        objWriter.WriteLine($"usemtl mat_{subId}");
+                    if (textureSubId >= 0)
+                        objWriter.WriteLine($"usemtl mat_{textureSubId}");
 
                     foreach (var (vi0, vi1, vi2) in triangles)
                     {
@@ -275,60 +356,105 @@ namespace WorldExporter
                 indexBase += mesh.VerticesCount;
             }
 
-            // --- Debug: show what texturePosToAsset contains vs usedSubIds positions ---
-            WorldExporterLog($"[DBG] texturePosToAsset entries: {texturePosToAsset.Count}, usedSubIds: {string.Join(", ", usedSubIds)}");
-            foreach (var kv in texturePosToAsset)
-                WorldExporterLog($"[DBG] posMap: ({kv.Key.Item1:G4},{kv.Key.Item2:G4},{kv.Key.Item3:G4},{kv.Key.Item4:G4}) -> {kv.Value}");
-            foreach (int sid in usedSubIds)
+            // Helper function: Get AssetLocation for a given subId (lazy, cached)
+            AssetLocation GetAssetLocationForSubId(int subId, Dictionary<int, AssetLocation> cache)
             {
-                TextureAtlasPosition p = capi.BlockTextureAtlas.Positions[sid];
-                WorldExporterLog($"[DBG] subId {sid} atlas pos: ({p?.x1:G4},{p?.y1:G4},{p?.x2:G4},{p?.y2:G4})");
+                if (cache.TryGetValue(subId, out var cached))
+                    return cached;
+
+                // Lazy search: only runs for unique subIds actually used
+                foreach (Block block in capi.World.Blocks)
+                {
+                    if (block?.Textures == null) continue;
+                    foreach (var kvp in block.Textures)
+                    {
+                        var baked = kvp.Value?.Baked;
+                        if (baked?.TextureSubId == subId)
+                        {
+                            cache[subId] = baked.BakedName;
+                            return baked.BakedName;
+                        }
+
+                        if (baked?.BakedVariants != null)
+                        {
+                            foreach (var variant in baked.BakedVariants)
+                            {
+                                if (variant.TextureSubId == subId)
+                                {
+                                    cache[subId] = variant.BakedName;
+                                    return variant.BakedName;
+                                }
+                            }
+                        }
+
+                        if (baked?.BakedTiles != null)
+                        {
+                            foreach (var tile in baked.BakedTiles)
+                            {
+                                if (tile.TextureSubId == subId)
+                                {
+                                    cache[subId] = tile.BakedName;
+                                    return tile.BakedName;
+                                }
+                            }
+                        }
+                    }
+                }
+                return null;
             }
 
-            // --- Build subId → AssetLocation via the position map from TerrainMeshPool ---
-            // texturePosToAsset was built using GetTextureSource(block) per block, so its
-            // positions are guaranteed to match what the tessellator stored in mesh.TextureIds.
-            var textureSubIdToAsset = new Dictionary<int, AssetLocation>();
-            foreach (int subId in usedSubIds)
+            // Extract unique subIds from usedTextures
+            var uniqueSubIds = new HashSet<int>();
+            foreach (var (x1, y1, x2, y2, subId) in usedTextures)
             {
-                TextureAtlasPosition pos = capi.BlockTextureAtlas.Positions[subId];
-                if (pos == null) continue;
-                if (texturePosToAsset.TryGetValue((pos.x1, pos.y1, pos.x2, pos.y2), out AssetLocation loc))
-                    textureSubIdToAsset[subId] = loc;
-                else
-                    WorldExporterLog($"Could not resolve asset for texture subId {subId}");
+                if (subId >= 0)
+                    uniqueSubIds.Add(subId);
             }
 
             // --- MTL file + texture PNG export ---
             using var mtlWriter = new StreamWriter(mtlPath);
             mtlWriter.WriteLine("# Materials exported by vsworldexporter");
 
-            foreach (int subId in usedSubIds)
+            var subIdToAssetLoc = new Dictionary<int, AssetLocation>();
+            int texturesExported = 0;
+
+            foreach (int subId in uniqueSubIds)
             {
+                AssetLocation loc = GetAssetLocationForSubId(subId, subIdToAssetLoc);
                 string texFilename = $"tex_{subId}.png";
-                if (textureSubIdToAsset.TryGetValue(subId, out AssetLocation loc))
+
+                if (loc != null)
                 {
                     string sanitised = (loc.Domain + "_" + loc.Path).Replace('/', '_').Replace('\\', '_') + ".png";
                     texFilename = "textures/" + sanitised;
 
-                    IAsset texAsset = capi.Assets.TryGet(
-                        loc.Clone().WithPathPrefixOnce("textures/").WithPathAppendixOnce(".png"));
+                    IAsset texAsset = capi.Assets.TryGet(loc.Clone().WithPathPrefixOnce("textures/").WithPathAppendixOnce(".png"));
                     if (texAsset != null)
                     {
                         File.WriteAllBytes(Path.Combine(texturesDir, sanitised), texAsset.Data);
+                        texturesExported++;
                     }
                     else
                     {
-                        WorldExporterLog($"Could not load texture asset for {loc}");
+                        WorldExporterLog($"Warning: Could not load texture asset for {loc}");
                     }
+                }
+                else
+                {
+                    WorldExporterLog($"Warning: No asset location found for texture subId {subId}");
                 }
 
                 mtlWriter.WriteLine($"newmtl mat_{subId}");
+                mtlWriter.WriteLine("Ka 1.000000 1.000000 1.000000");  // Ambient color
+                mtlWriter.WriteLine("Kd 1.000000 1.000000 1.000000");  // Diffuse color (white so texture shows through)
+                mtlWriter.WriteLine("Ks 0.000000 0.000000 0.000000");  // Specular color (no specular)
+                mtlWriter.WriteLine("d 1.0");                           // Dissolve (opacity)
+                mtlWriter.WriteLine("illum 2");                         // Illumination model (2 = highlight on)
                 mtlWriter.WriteLine($"map_Kd {texFilename}");
                 mtlWriter.WriteLine();
             }
 
-            WorldExporterChat($"OBJ export complete. Written to {objPath} with {usedSubIds.Count} unique textures.");
+            WorldExporterChat($"OBJ export complete. Written to {objPath} with {texturesExported} textures exported.");
         }
 
         public void ExportCuboid(IClientWorldAccessor world, BlockPos center, int x, int y, int z, string format = "stl")
@@ -352,100 +478,33 @@ namespace WorldExporter
                 return false;
             }
 
-            TerrainMeshPool mesh_pool;
-            try
-            {
-                mesh_pool = new TerrainMeshPool(capi);
-
-                // Walk blocks and gather meshes (no texture mapping)
-                world.BlockAccessor.WalkBlocks(start, end, (block, x, y, z) =>
-                {
-                    try
-                    {
-                        // Skip air blocks (1.21.x air has default cube mesh)
-                        if (block.FirstCodePart() == "air") return;
-
-                        // Set transform relative to start position
-                        mesh_pool.SetTranslation(new Vec3f((new BlockPos(x, y, z) - start).AsVec3i));
-
-                        // Handle block entities
-                        var block_entity = world.BlockAccessor.GetBlockEntity(new BlockPos(x, y, z));
-                        if (block_entity != null)
-                        {
-                            // Supposedly, it is not thread safe to use the main thread tesselator?
-                            // We'll use it anyway? Perhaps as long as we block the main thread?
-                            bool skip_default = block_entity.OnTesselation(mesh_pool, capi.Tesselator);
-
-                            // If we aren't adding the default mesh, continue to next block.
-                            if (skip_default) return;
-                        }
-
-                        // Get and add the default mesh
-                        MeshData mesh = capi.TesselatorManager.GetDefaultBlockMesh(block);
-                        if (mesh != null)
-                        {
-                            mesh_pool.AddMeshData(mesh);
-                        }
-                    }
-                    catch
-                    {
-                        WorldExporterChat($"Failed to get mesh of {block.Code} at {x},{y},{z}");
-                    }
-                });
-            }
-            catch (Exception e)
-            {
-                var error = "Failed to generate mesh.";
-                WorldExporterChat(error + " See log for more details.");
-                WorldExporterLog(error + $" Exception: {e}");
-                return false;
-            }
-
             string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
             bool useObj = format?.ToLower() == "obj";
 
-            if (useObj)
+            try
             {
-                string baseOutputPath = Path.Combine(config.outputDirectory, $"world_export_{timestamp}");
-                try
+                var task = new Task(() =>
                 {
-                    var task = new Task(() =>
+                    if (useObj)
                     {
-                        WriteToOBJ(mesh_pool.meshes, world, start, end, baseOutputPath);
-                    });
-                    task.Start();
-                    task.Wait(30000);
-                }
-                catch (Exception e)
-                {
-                    var error = $"Failed to export OBJ to \"{config.outputDirectory}\".";
-                    WorldExporterChat(error + " See log for more details.");
-                    WorldExporterLog(error + $" Exception: {e}");
-                    return false;
-                }
+                        string baseOutputPath = Path.Combine(config.outputDirectory, $"world_export_{timestamp}");
+                        WriteToOBJ(world, start, end, baseOutputPath);
+                    }
+                    else
+                    {
+                        string outputPath = Path.Combine(config.outputDirectory, $"world_export_{timestamp}.stl");
+                        WriteToSTL(world, start, end, outputPath);
+                    }
+                });
+                task.Start();
+                task.Wait(useObj ? 30000 : 10000);
             }
-            else
+            catch (Exception e)
             {
-                string output_file = Path.Combine(config.outputDirectory, $"world_export_{timestamp}.stl");
-                try
-                {
-                    var task = new Task(() =>
-                    {
-                        using (FileStream fs = new FileStream(output_file, FileMode.Create, FileAccess.Write))
-                        {
-                            WriteMeshToSTL(mesh_pool.meshes, fs);
-                        }
-                    });
-                    task.Start();
-                    task.Wait(10000);
-                }
-                catch (Exception e)
-                {
-                    var error = $"Failed to export STL to \"{config.outputDirectory}\".";
-                    WorldExporterChat(error + " See log for more details.");
-                    WorldExporterLog(error + $" Exception: {e}");
-                    return false;
-                }
+                var error = $"Failed to export {format.ToUpper()} to \"{config.outputDirectory}\".";
+                WorldExporterChat(error + " See log for more details.");
+                WorldExporterLog(error + $" Exception: {e}");
+                return false;
             }
 
             return true;
