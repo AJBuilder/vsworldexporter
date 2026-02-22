@@ -19,7 +19,7 @@
 
   <ItemGroup>
     <Reference Include="protobuf-net">
-      <HintPath>..\..\..\AppData\Roaming\Vintagestory\Lib\protobuf-net.dll</HintPath>
+      <HintPath>$(VINTAGE_STORY)/Lib/protobuf-net.dll</HintPath>
     </Reference>
     <Reference Include="VintagestoryAPI">
       <HintPath>$(VINTAGE_STORY)/VintagestoryAPI.dll</HintPath>
