@@ -4,10 +4,10 @@
     <TargetFramework>net8.0</TargetFramework>
     <ModInfoFile>modinfo.json</ModInfoFile>
     <ModName>WorldExporter</ModName>
-    <Version>0.1.1</Version>
+    <Version>0.3.0</Version>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <OutputPath>bin\$(Configuration)\Mods\$(ModName)\</OutputPath>
-    <ZipOutputPath>bin\$(Configuration)\Mods\$(ModName)-v$(Version).zip</ZipOutputPath>
+    <OutputPath>bin/$(Configuration)/Mods/$(ModName)/</OutputPath>
+    <ZipOutputPath>bin/$(Configuration)/Mods/$(ModName)-v$(Version).zip</ZipOutputPath>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
   
@@ -59,7 +59,7 @@
 
   <!-- Only zip if Release build -->
   <Target Name="ZipMod" AfterTargets="CopyDependencies" Condition="'$(Configuration)' == 'Release'">
-    <Exec Command="powershell -NoLogo -NoProfile -Command &quot;Compress-Archive -Path '$(OutputPath)*' -DestinationPath '$(ZipOutputPath)' -Force&quot;" />
+    <ZipDirectory SourceDirectory="$(OutputPath)" DestinationFile="$(ZipOutputPath)" Overwrite="true" />
     <RemoveDir Directories="$(OutputPath)" />
   </Target>
 

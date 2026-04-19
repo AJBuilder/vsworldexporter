@@ -13,5 +13,14 @@ namespace WorldExporter
     {
         [ProtoMember(1)]
         public string outputDirectory;
+
+        [ProtoMember(2)]
+        public bool exportAllRenderPasses = true;
+
+        [ProtoMember(3)]
+        public bool separateOBJPerPass = true;
+
+        [ProtoMember(4)]
+        public int maxChunksPerExport = 64;
     }
 }
