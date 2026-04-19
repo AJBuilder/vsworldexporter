@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using OpenTK.Graphics.OpenGL;
+using SkiaSharp;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
@@ -22,7 +24,8 @@ public class OBJExporter : IFormatExporter
         string texturesDir = Path.Combine(outputDir, "textures");
         Directory.CreateDirectory(texturesDir);
 
-        var allUsedTextureSubIds = new HashSet<int>();
+        // Export texture atlas first
+        ExportTextureAtlas(texturesDir, capi);
 
         foreach (var kvp in meshData)
         {
@@ -38,35 +41,31 @@ public class OBJExporter : IFormatExporter
 
             WorldExporterModSystem.WorldExporterChat($"Exporting {passName} pass ({meshList.Count} meshes)...");
 
-            var passUsedTextureSubIds = ExportRenderPassToOBJ(
+            ExportRenderPassToOBJ(
                 meshList,
                 exportOrigin,
                 passObjPath,
-                mtlPath,
                 mtlFilename,
+                mtlPath,
                 capi);
-
-            allUsedTextureSubIds.UnionWith(passUsedTextureSubIds);
         }
 
-        ExportTextures(allUsedTextureSubIds, texturesDir, capi);
-
-        WorldExporterModSystem.WorldExporterChat($"OBJ export complete: {meshData.Count} render passes, {allUsedTextureSubIds.Count} textures");
+        WorldExporterModSystem.WorldExporterChat($"OBJ export complete: {meshData.Count} render passes");
     }
 
-    private HashSet<int> ExportRenderPassToOBJ(
+    private void ExportRenderPassToOBJ(
         List<MeshDataWithPosition> meshList,
         BlockPos exportOrigin,
         string objPath,
-        string mtlPath,
         string mtlFilename,
+        string mtlPath,
         ICoreClientAPI capi)
     {
-        var usedTextureSubIds = new HashSet<int>();
-
         using var objWriter = new StreamWriter(objPath);
         objWriter.WriteLine("# Exported by vsworldexporter");
         objWriter.WriteLine($"mtllib {mtlFilename}");
+        objWriter.WriteLine();
+        objWriter.WriteLine("usemtl block_atlas");
         objWriter.WriteLine();
 
         int vertexIndexBase = 1;
@@ -81,16 +80,14 @@ public class OBJExporter : IFormatExporter
                 (worldPos - exportOrigin.AsVec3i).Z);
 
             WriteVertices(objWriter, mesh, offset);
-            WriteUVs(objWriter, mesh, usedTextureSubIds, capi);
+            WriteUVs(objWriter, mesh);
             WriteNormals(objWriter, mesh);
-            WriteFaces(objWriter, mesh, vertexIndexBase, capi);
+            WriteFaces(objWriter, mesh, vertexIndexBase);
 
             vertexIndexBase += mesh.VerticesCount;
         }
 
-        WriteMTLFile(mtlPath, usedTextureSubIds);
-
-        return usedTextureSubIds;
+        WriteMTLFile(mtlPath);
     }
 
     private void WriteVertices(StreamWriter writer, MeshData mesh, Vec3f offset)
@@ -104,54 +101,24 @@ public class OBJExporter : IFormatExporter
         }
     }
 
-    private void WriteUVs(StreamWriter writer, MeshData mesh, HashSet<int> usedTextures, ICoreClientAPI capi)
+    private void WriteUVs(StreamWriter writer, MeshData mesh)
     {
-        bool hasUvs = mesh.Uv != null && mesh.TextureIds != null && mesh.TextureIndices != null;
-
-        for (int i = 0; i < mesh.VerticesCount; i++)
+        // UVs are already in atlas coordinates (0.0-1.0), just write them directly
+        if (mesh.Uv != null && mesh.Uv.Length >= mesh.VerticesCount * 2)
         {
-            if (!hasUvs)
+            for (int i = 0; i < mesh.VerticesCount; i++)
+            {
+                float u = mesh.Uv[i * 2];
+                float v = mesh.Uv[i * 2 + 1];
+                writer.WriteLine(FormattableString.Invariant($"vt {u:F6} {v:F6}"));
+            }
+        }
+        else
+        {
+            for (int i = 0; i < mesh.VerticesCount; i++)
             {
                 writer.WriteLine("vt 0 0");
-                continue;
             }
-
-            int faceIdx = i / mesh.VerticesPerFace;
-            if (faceIdx >= mesh.TextureIndices.Length)
-            {
-                writer.WriteLine("vt 0 0");
-                continue;
-            }
-
-            byte texIndex = mesh.TextureIndices[faceIdx];
-            if (texIndex >= mesh.TextureIds.Length)
-            {
-                writer.WriteLine("vt 0 0");
-                continue;
-            }
-
-            int textureSubId = mesh.TextureIds[texIndex];
-
-            float uvX = mesh.Uv[i * 2];
-            float uvY = mesh.Uv[i * 2 + 1];
-
-            if (textureSubId < capi.BlockTextureAtlas.Positions.Length)
-            {
-                var texPos = capi.BlockTextureAtlas.Positions[textureSubId];
-                if (texPos != null)
-                {
-                    float atlasW = texPos.x2 - texPos.x1;
-                    float atlasH = texPos.y2 - texPos.y1;
-                    float u = atlasW > 0f ? (uvX - texPos.x1) / atlasW : 0f;
-                    float v = atlasH > 0f ? 1f - (uvY - texPos.y1) / atlasH : 0f;
-
-                    writer.WriteLine(FormattableString.Invariant($"vt {u:F6} {v:F6}"));
-                    usedTextures.Add(textureSubId);
-                    continue;
-                }
-            }
-
-            writer.WriteLine("vt 0 0");
         }
     }
 
@@ -176,150 +143,89 @@ public class OBJExporter : IFormatExporter
         }
     }
 
-    private void WriteFaces(StreamWriter writer, MeshData mesh, int indexBase, ICoreClientAPI capi)
+    private void WriteFaces(StreamWriter writer, MeshData mesh, int indexBase)
     {
-        var materialGroups = new Dictionary<int, List<(int, int, int)>>();
-
-        bool hasTextures = mesh.TextureIds != null && mesh.TextureIndices != null;
-
+        // All faces use the same material (atlas texture)
         for (int i = 0; i < mesh.IndicesCount; i += 3)
         {
             int vi0 = (int)mesh.Indices[i];
             int vi1 = (int)mesh.Indices[i + 1];
             int vi2 = (int)mesh.Indices[i + 2];
 
-            int textureSubId = -1;
-            if (hasTextures)
-            {
-                int faceIdx = vi0 / mesh.VerticesPerFace;
-                if (faceIdx < mesh.TextureIndices.Length)
-                {
-                    byte texIndex = mesh.TextureIndices[faceIdx];
-                    if (texIndex < mesh.TextureIds.Length)
-                    {
-                        textureSubId = mesh.TextureIds[texIndex];
-                    }
-                }
-            }
+            int v0 = indexBase + vi0;
+            int v1 = indexBase + vi1;
+            int v2 = indexBase + vi2;
 
-            if (!materialGroups.ContainsKey(textureSubId))
-                materialGroups[textureSubId] = new List<(int, int, int)>();
-
-            materialGroups[textureSubId].Add((vi0, vi1, vi2));
-        }
-
-        foreach (var kvp in materialGroups)
-        {
-            int textureSubId = kvp.Key;
-            if (textureSubId >= 0)
-                writer.WriteLine($"usemtl mat_{textureSubId}");
-
-            foreach (var (vi0, vi1, vi2) in kvp.Value)
-            {
-                int v0 = indexBase + vi0;
-                int v1 = indexBase + vi1;
-                int v2 = indexBase + vi2;
-                writer.WriteLine($"f {v0}/{v0}/{v0} {v1}/{v1}/{v1} {v2}/{v2}/{v2}");
-            }
+            writer.WriteLine($"f {v0}/{v0}/{v0} {v1}/{v1}/{v1} {v2}/{v2}/{v2}");
         }
     }
 
-    private void WriteMTLFile(string mtlPath, HashSet<int> textureSubIds)
+    private void WriteMTLFile(string mtlPath)
     {
         using var mtlWriter = new StreamWriter(mtlPath);
-        mtlWriter.WriteLine("# Materials exported by vsworldexporter");
+        mtlWriter.WriteLine("# Material exported by vsworldexporter");
         mtlWriter.WriteLine();
+        mtlWriter.WriteLine("newmtl block_atlas");
+        mtlWriter.WriteLine("Ka 1.000000 1.000000 1.000000");
+        mtlWriter.WriteLine("Kd 1.000000 1.000000 1.000000");
+        mtlWriter.WriteLine("Ks 0.000000 0.000000 0.000000");
+        mtlWriter.WriteLine("d 1.0");
+        mtlWriter.WriteLine("illum 2");
+        mtlWriter.WriteLine("map_Kd textures/block_atlas_0.png");
+    }
 
-        foreach (int subId in textureSubIds)
+    private void ExportTextureAtlas(string texturesDir, ICoreClientAPI capi)
+    {
+        var atlasTextures = capi.BlockTextureAtlas.AtlasTextures;
+
+        if (atlasTextures == null || atlasTextures.Count == 0)
         {
-            mtlWriter.WriteLine($"newmtl mat_{subId}");
-            mtlWriter.WriteLine("Ka 1.000000 1.000000 1.000000");
-            mtlWriter.WriteLine("Kd 1.000000 1.000000 1.000000");
-            mtlWriter.WriteLine("Ks 0.000000 0.000000 0.000000");
-            mtlWriter.WriteLine("d 1.0");
-            mtlWriter.WriteLine("illum 2");
-            mtlWriter.WriteLine($"map_Kd textures/tex_{subId}.png");
-            mtlWriter.WriteLine();
+            WorldExporterModSystem.WorldExporterLog("Warning: No atlas textures found");
+            return;
+        }
+
+        for (int i = 0; i < atlasTextures.Count; i++)
+        {
+            var loadedTexture = atlasTextures[i];
+            if (loadedTexture == null || loadedTexture.TextureId == 0)
+            {
+                WorldExporterModSystem.WorldExporterLog($"Warning: Atlas texture {i} is null or has invalid TextureId");
+                continue;
+            }
+
+            string atlasPath = Path.Combine(texturesDir, $"block_atlas_{i}.png");
+
+            try
+            {
+                DownloadTextureFromGPU(loadedTexture, atlasPath);
+                WorldExporterModSystem.WorldExporterChat($"Exported texture atlas {i} ({loadedTexture.Width}x{loadedTexture.Height})");
+            }
+            catch (Exception e)
+            {
+                WorldExporterModSystem.WorldExporterLog($"Error exporting atlas {i}: {e.Message}");
+            }
         }
     }
 
-    private void ExportTextures(HashSet<int> textureSubIds, string texturesDir, ICoreClientAPI capi)
+    private void DownloadTextureFromGPU(LoadedTexture texture, string outputPath)
     {
-        var subIdToAssetLoc = new Dictionary<int, AssetLocation>();
-        int texturesExported = 0;
+        int width = texture.Width;
+        int height = texture.Height;
 
-        foreach (int subId in textureSubIds)
-        {
-            AssetLocation loc = GetAssetLocationForSubId(subId, subIdToAssetLoc, capi);
-            string texFilename = $"tex_{subId}.png";
+        // Bind the texture
+        GL.BindTexture(TextureTarget.Texture2D, texture.TextureId);
 
-            if (loc != null)
-            {
-                string sanitised = (loc.Domain + "_" + loc.Path).Replace('/', '_').Replace('\\', '_') + ".png";
-                texFilename = sanitised;
+        // Download pixels from GPU
+        byte[] pixels = new byte[width * height * 4]; // RGBA
+        GL.GetTexImage(TextureTarget.Texture2D, 0, PixelFormat.Rgba, PixelType.UnsignedByte, pixels);
 
-                IAsset texAsset = capi.Assets.TryGet(loc.Clone().WithPathPrefixOnce("textures/").WithPathAppendixOnce(".png"));
-                if (texAsset != null)
-                {
-                    File.WriteAllBytes(Path.Combine(texturesDir, sanitised), texAsset.Data);
-                    texturesExported++;
-                }
-                else
-                {
-                    WorldExporterModSystem.WorldExporterLog($"Warning: Could not load texture asset for {loc}");
-                }
-            }
-            else
-            {
-                WorldExporterModSystem.WorldExporterLog($"Warning: No asset location found for texture subId {subId}");
-            }
-        }
+        // Create SKBitmap and save
+        using var bitmap = new SKBitmap(width, height, SKColorType.Rgba8888, SKAlphaType.Unpremul);
+        System.Runtime.InteropServices.Marshal.Copy(pixels, 0, bitmap.GetPixels(), pixels.Length);
 
-        WorldExporterModSystem.WorldExporterChat($"Exported {texturesExported} textures");
-    }
+        // Save directly without flipping
+        bitmap.Encode(SKEncodedImageFormat.Png, 100).SaveTo(File.OpenWrite(outputPath));
 
-    private AssetLocation GetAssetLocationForSubId(int subId, Dictionary<int, AssetLocation> cache, ICoreClientAPI capi)
-    {
-        if (cache.TryGetValue(subId, out var cached))
-            return cached;
-
-        foreach (Block block in capi.World.Blocks)
-        {
-            if (block?.Textures == null) continue;
-            foreach (var kvp in block.Textures)
-            {
-                var baked = kvp.Value?.Baked;
-                if (baked?.TextureSubId == subId)
-                {
-                    cache[subId] = baked.BakedName;
-                    return baked.BakedName;
-                }
-
-                if (baked?.BakedVariants != null)
-                {
-                    foreach (var variant in baked.BakedVariants)
-                    {
-                        if (variant.TextureSubId == subId)
-                        {
-                            cache[subId] = variant.BakedName;
-                            return variant.BakedName;
-                        }
-                    }
-                }
-
-                if (baked?.BakedTiles != null)
-                {
-                    foreach (var tile in baked.BakedTiles)
-                    {
-                        if (tile.TextureSubId == subId)
-                        {
-                            cache[subId] = tile.BakedName;
-                            return tile.BakedName;
-                        }
-                    }
-                }
-            }
-        }
-        return null;
+        GL.BindTexture(TextureTarget.Texture2D, 0);
     }
 }
