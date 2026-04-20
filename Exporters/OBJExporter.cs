@@ -13,6 +13,10 @@ namespace WorldExporter.Exporters;
 
 public class OBJExporter : IFormatExporter
 {
+    private TopSoilTextureBaker textureBaker;
+    private TopSoilMeshProcessor meshProcessor;
+    private Dictionary<(int, int, bool), string> bakedTextureFiles;
+
     public void Export(
         Dictionary<EnumChunkRenderPass, List<MeshDataWithPosition>> meshData,
         BlockPos exportOrigin,
@@ -25,33 +29,46 @@ public class OBJExporter : IFormatExporter
         string exportDir = Path.Combine(parentDir, baseOutputPath);
         Directory.CreateDirectory(exportDir);
 
-        // Export texture atlas first (directly in export directory)
-        ExportTextureAtlas(exportDir, capi);
+        // Initialize TopSoil processors
+        textureBaker = new TopSoilTextureBaker(capi);
+        meshProcessor = new TopSoilMeshProcessor(capi);
+        bakedTextureFiles = new Dictionary<(int, int, bool), string>();
 
-        foreach (var kvp in meshData)
+        try
         {
-            EnumChunkRenderPass pass = kvp.Key;
-            List<MeshDataWithPosition> meshList = kvp.Value;
+            // Export texture atlas first (directly in export directory)
+            ExportTextureAtlas(exportDir, capi);
 
-            if (meshList.Count == 0) continue;
+            foreach (var kvp in meshData)
+            {
+                EnumChunkRenderPass pass = kvp.Key;
+                List<MeshDataWithPosition> meshList = kvp.Value;
 
-            string passName = pass.ToString().ToLower();
-            string passObjPath = Path.Combine(exportDir, $"{passName}.obj");
-            string mtlFilename = $"{passName}.mtl";
-            string mtlPath = Path.Combine(exportDir, mtlFilename);
+                if (meshList.Count == 0) continue;
 
-            WorldExporterModSystem.WorldExporterChat($"Exporting {passName} pass ({meshList.Count} meshes)...");
+                string passName = pass.ToString().ToLower();
+                string passObjPath = Path.Combine(exportDir, $"{passName}.obj");
+                string mtlFilename = $"{passName}.mtl";
+                string mtlPath = Path.Combine(exportDir, mtlFilename);
 
-            ExportRenderPassToOBJ(
-                meshList,
-                exportOrigin,
-                passObjPath,
-                mtlFilename,
-                mtlPath,
-                capi);
+                WorldExporterModSystem.WorldExporterChat($"Exporting {passName} pass ({meshList.Count} meshes)...");
+
+                if (pass == EnumChunkRenderPass.TopSoil)
+                {
+                    ExportTopSoilRenderPass(meshList, exportOrigin, passObjPath, mtlFilename, mtlPath, exportDir, capi);
+                }
+                else
+                {
+                    ExportRenderPassToOBJ(meshList, exportOrigin, passObjPath, mtlFilename, mtlPath, capi);
+                }
+            }
+
+            WorldExporterModSystem.WorldExporterChat($"OBJ export complete: {meshData.Count} render passes in {exportDir}");
         }
-
-        WorldExporterModSystem.WorldExporterChat($"OBJ export complete: {meshData.Count} render passes in {exportDir}");
+        finally
+        {
+            textureBaker?.Dispose();
+        }
     }
 
     private void ExportRenderPassToOBJ(
@@ -275,5 +292,179 @@ public class OBJExporter : IFormatExporter
         bitmap.Encode(SKEncodedImageFormat.Png, 100).SaveTo(File.OpenWrite(outputPath));
 
         GL.BindTexture(TextureTarget.Texture2D, 0);
+    }
+
+    private void ExportTopSoilRenderPass(
+        List<MeshDataWithPosition> meshList,
+        BlockPos exportOrigin,
+        string objPath,
+        string mtlFilename,
+        string mtlPath,
+        string exportDir,
+        ICoreClientAPI capi)
+    {
+        WorldExporterModSystem.WorldExporterLog("ExportTopSoilRenderPass: Starting TopSoil export");
+
+        var uniqueTexturePairs = new HashSet<(int soilTexId, int grassTexId, bool isTop, int atlasNumber)>();
+        var allFaces = new List<(TopSoilFace face, MeshDataWithPosition meshWithPos)>();
+
+        foreach (var meshWithPos in meshList)
+        {
+            var faces = meshProcessor.ProcessMesh(meshWithPos.Mesh);
+            foreach (var face in faces)
+            {
+                allFaces.Add((face, meshWithPos));
+
+                if (!face.IsBottomFace)
+                {
+                    uniqueTexturePairs.Add((face.SoilTextureId, face.GrassTextureId, face.IsTopFace, meshWithPos.AtlasNumber));
+                }
+            }
+        }
+
+        WorldExporterModSystem.WorldExporterLog($"ExportTopSoilRenderPass: Found {uniqueTexturePairs.Count} unique texture pairs");
+
+        foreach (var (soilTexId, grassTexId, isTop, atlasNumber) in uniqueTexturePairs)
+        {
+            SKBitmap baked = textureBaker.BakeTexturePair(atlasNumber, soilTexId, grassTexId, isTop);
+
+            string filename = $"topsoil_baked_{soilTexId}_{grassTexId}_{(isTop ? "top" : "side")}.png";
+            string filepath = Path.Combine(exportDir, filename);
+
+            using (var stream = File.OpenWrite(filepath))
+            {
+                baked.Encode(SKEncodedImageFormat.Png, 100).SaveTo(stream);
+            }
+
+            bakedTextureFiles[(soilTexId, grassTexId, isTop)] = filename;
+            WorldExporterModSystem.WorldExporterLog($"ExportTopSoilRenderPass: Exported baked texture {filename}");
+        }
+
+        using var objWriter = new StreamWriter(objPath);
+        objWriter.WriteLine("# Exported by vsworldexporter");
+        objWriter.WriteLine($"mtllib {mtlFilename}");
+        objWriter.WriteLine();
+
+        int vertexIndexBase = 1;
+        string currentMaterial = "";
+
+        foreach (var (face, meshWithPos) in allFaces)
+        {
+            MeshData mesh = meshWithPos.Mesh;
+
+            if (mesh.xyz == null || mesh.VerticesCount == 0)
+            {
+                WorldExporterModSystem.WorldExporterLog($"ExportTopSoilRenderPass: Skipping face due to missing xyz data");
+                continue;
+            }
+
+            if (mesh.Uv == null)
+            {
+                WorldExporterModSystem.WorldExporterLog($"ExportTopSoilRenderPass: Skipping face due to missing UV data");
+                continue;
+            }
+
+            Vec3i worldPos = meshWithPos.WorldPosition;
+            Vec3f offset = new Vec3f(
+                (worldPos - exportOrigin.AsVec3i).X,
+                (worldPos - exportOrigin.AsVec3i).Y,
+                (worldPos - exportOrigin.AsVec3i).Z);
+
+            string materialName;
+            if (face.IsBottomFace)
+            {
+                materialName = $"topsoil_soil_{face.SoilTextureId}";
+            }
+            else
+            {
+                materialName = $"topsoil_baked_{face.SoilTextureId}_{face.GrassTextureId}_{(face.IsTopFace ? "top" : "side")}";
+            }
+
+            if (materialName != currentMaterial)
+            {
+                objWriter.WriteLine($"usemtl {materialName}");
+                currentMaterial = materialName;
+            }
+
+            for (int i = 0; i < face.VertexIndices.Length; i++)
+            {
+                int vertIdx = face.VertexIndices[i];
+
+                if (vertIdx * 3 + 2 >= mesh.xyz.Length || vertIdx * 2 + 1 >= mesh.Uv.Length)
+                {
+                    WorldExporterModSystem.WorldExporterLog($"ExportTopSoilRenderPass: Vertex index {vertIdx} out of bounds, skipping");
+                    continue;
+                }
+
+                float x = mesh.xyz[vertIdx * 3] + offset.X;
+                float y = mesh.xyz[vertIdx * 3 + 1] + offset.Y;
+                float z = mesh.xyz[vertIdx * 3 + 2] + offset.Z;
+                objWriter.WriteLine(FormattableString.Invariant($"v {x:F6} {y:F6} {z:F6}"));
+
+                float u, v;
+                if (face.SoilTextureId >= capi.BlockTextureAtlas.Positions.Length)
+                {
+                    WorldExporterModSystem.WorldExporterLog($"ExportTopSoilRenderPass: Invalid texture ID {face.SoilTextureId}, using default UVs");
+                    u = mesh.Uv[vertIdx * 2];
+                    v = 1.0f - mesh.Uv[vertIdx * 2 + 1];
+                }
+                else
+                {
+                    var soilTexPos = capi.BlockTextureAtlas.Positions[face.SoilTextureId];
+                    u = RemapUV(mesh.Uv[vertIdx * 2], soilTexPos, true);
+                    v = 1.0f - RemapUV(mesh.Uv[vertIdx * 2 + 1], soilTexPos, false);
+                }
+                objWriter.WriteLine(FormattableString.Invariant($"vt {u:F6} {v:F6}"));
+
+                float nx = 0, ny = 1, nz = 0;
+                if (mesh.Flags != null && vertIdx < mesh.Flags.Length)
+                {
+                    float[] normal = new float[3];
+                    VertexFlags.UnpackNormal(mesh.Flags[vertIdx], normal);
+                    nx = normal[0];
+                    ny = normal[1];
+                    nz = normal[2];
+                }
+                objWriter.WriteLine(FormattableString.Invariant($"vn {nx:F6} {ny:F6} {nz:F6}"));
+            }
+
+            int v0 = vertexIndexBase;
+            int v1 = vertexIndexBase + 1;
+            int v2 = vertexIndexBase + 2;
+            objWriter.WriteLine($"f {v0}/{v0}/{v0} {v1}/{v1}/{v1} {v2}/{v2}/{v2}");
+            vertexIndexBase += 3;
+        }
+
+        WriteTopSoilMTLFile(mtlPath, capi);
+        WorldExporterModSystem.WorldExporterLog("ExportTopSoilRenderPass: Export complete");
+    }
+
+    private float RemapUV(float atlasUV, TextureAtlasPosition texPos, bool isU)
+    {
+        float min = isU ? texPos.x1 : texPos.y1;
+        float max = isU ? texPos.x2 : texPos.y2;
+        float range = max - min;
+        if (range == 0) return 0;
+        return (atlasUV - min) / range;
+    }
+
+    private void WriteTopSoilMTLFile(string mtlPath, ICoreClientAPI capi)
+    {
+        using var mtlWriter = new StreamWriter(mtlPath);
+        mtlWriter.WriteLine("# Material exported by vsworldexporter");
+        mtlWriter.WriteLine();
+
+        foreach (var ((soilTexId, grassTexId, isTop), filename) in bakedTextureFiles)
+        {
+            string materialName = $"topsoil_baked_{soilTexId}_{grassTexId}_{(isTop ? "top" : "side")}";
+            mtlWriter.WriteLine($"newmtl {materialName}");
+            mtlWriter.WriteLine("Ka 1.000000 1.000000 1.000000");
+            mtlWriter.WriteLine("Kd 1.000000 1.000000 1.000000");
+            mtlWriter.WriteLine("Ks 0.000000 0.000000 0.000000");
+            mtlWriter.WriteLine("d 1.0");
+            mtlWriter.WriteLine("illum 2");
+            mtlWriter.WriteLine($"map_Kd {filename}");
+            mtlWriter.WriteLine();
+        }
     }
 }
