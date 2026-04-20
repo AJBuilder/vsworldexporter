@@ -303,6 +303,8 @@ public class ChunkMeshCollector
             int atlasNumber = (int)atlasField.GetValue(part);
 
             WorldExporterModSystem.WorldExporterLog($"      Part {partIndex}: adding mesh with {mesh.VerticesCount} vertices to pass {pass}");
+            WorldExporterModSystem.WorldExporterLog($"      Part {partIndex}: atlasNumber={atlasNumber}, TextureIds.Length={mesh.TextureIds?.Length ?? 0}, TextureIndices.Length={mesh.TextureIndices?.Length ?? 0}");
+            WorldExporterModSystem.WorldExporterLog($"      Part {partIndex}: Uv.Length={mesh.Uv?.Length ?? 0}, CustomShorts={mesh.CustomShorts?.Values?.Length ?? 0}");
 
             output[pass].Add(new MeshDataWithPosition
             {

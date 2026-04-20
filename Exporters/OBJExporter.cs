@@ -19,13 +19,14 @@ public class OBJExporter : IFormatExporter
         string outputPath,
         ICoreClientAPI capi)
     {
+        // Create a directory for this export
         string baseOutputPath = Path.GetFileNameWithoutExtension(outputPath);
-        string outputDir = Path.GetDirectoryName(outputPath);
-        string texturesDir = Path.Combine(outputDir, "textures");
-        Directory.CreateDirectory(texturesDir);
+        string parentDir = Path.GetDirectoryName(outputPath);
+        string exportDir = Path.Combine(parentDir, baseOutputPath);
+        Directory.CreateDirectory(exportDir);
 
-        // Export texture atlas first
-        ExportTextureAtlas(texturesDir, capi);
+        // Export texture atlas first (directly in export directory)
+        ExportTextureAtlas(exportDir, capi);
 
         foreach (var kvp in meshData)
         {
@@ -35,9 +36,9 @@ public class OBJExporter : IFormatExporter
             if (meshList.Count == 0) continue;
 
             string passName = pass.ToString().ToLower();
-            string passObjPath = Path.Combine(outputDir, $"{baseOutputPath}_{passName}.obj");
-            string mtlFilename = $"{baseOutputPath}_{passName}.mtl";
-            string mtlPath = Path.Combine(outputDir, mtlFilename);
+            string passObjPath = Path.Combine(exportDir, $"{passName}.obj");
+            string mtlFilename = $"{passName}.mtl";
+            string mtlPath = Path.Combine(exportDir, mtlFilename);
 
             WorldExporterModSystem.WorldExporterChat($"Exporting {passName} pass ({meshList.Count} meshes)...");
 
@@ -50,7 +51,7 @@ public class OBJExporter : IFormatExporter
                 capi);
         }
 
-        WorldExporterModSystem.WorldExporterChat($"OBJ export complete: {meshData.Count} render passes");
+        WorldExporterModSystem.WorldExporterChat($"OBJ export complete: {meshData.Count} render passes in {exportDir}");
     }
 
     private void ExportRenderPassToOBJ(
@@ -65,14 +66,28 @@ public class OBJExporter : IFormatExporter
         objWriter.WriteLine("# Exported by vsworldexporter");
         objWriter.WriteLine($"mtllib {mtlFilename}");
         objWriter.WriteLine();
-        objWriter.WriteLine("usemtl block_atlas");
-        objWriter.WriteLine();
 
+        // Group by atlas number and track which atlases are used
+        var usedAtlases = new HashSet<int>();
         int vertexIndexBase = 1;
+        int currentAtlas = -1;
+
+        // Determine render pass from filename for TopSoil special handling
+        bool isTopSoil = objPath.Contains("topsoil.obj");
 
         foreach (var meshWithPos in meshList)
         {
             MeshData mesh = meshWithPos.Mesh;
+            int atlasNumber = meshWithPos.AtlasNumber;
+            usedAtlases.Add(atlasNumber);
+
+            // Write material change if atlas changed
+            if (atlasNumber != currentAtlas)
+            {
+                objWriter.WriteLine($"usemtl block_atlas_{atlasNumber}");
+                currentAtlas = atlasNumber;
+            }
+
             Vec3i worldPos = meshWithPos.WorldPosition;
             Vec3f offset = new Vec3f(
                 (worldPos - exportOrigin.AsVec3i).X,
@@ -80,14 +95,14 @@ public class OBJExporter : IFormatExporter
                 (worldPos - exportOrigin.AsVec3i).Z);
 
             WriteVertices(objWriter, mesh, offset);
-            WriteUVs(objWriter, mesh);
+            WriteUVs(objWriter, mesh, isTopSoil);
             WriteNormals(objWriter, mesh);
             WriteFaces(objWriter, mesh, vertexIndexBase);
 
             vertexIndexBase += mesh.VerticesCount;
         }
 
-        WriteMTLFile(mtlPath);
+        WriteMTLFile(mtlPath, usedAtlases);
     }
 
     private void WriteVertices(StreamWriter writer, MeshData mesh, Vec3f offset)
@@ -101,20 +116,48 @@ public class OBJExporter : IFormatExporter
         }
     }
 
-    private void WriteUVs(StreamWriter writer, MeshData mesh)
+    private void WriteUVs(StreamWriter writer, MeshData mesh, bool isTopSoil)
     {
-        // UVs are already in atlas coordinates (0.0-1.0), just write them directly
-        if (mesh.Uv != null && mesh.Uv.Length >= mesh.VerticesCount * 2)
+        // For TopSoil pass, use grass overlay UVs from CustomShorts if available
+        if (isTopSoil && mesh.CustomShorts?.Values != null && mesh.CustomShorts.Values.Length >= mesh.VerticesCount * 2)
         {
+            // Log first few UV values to debug
+            if (mesh.VerticesCount > 0)
+            {
+                float u0 = mesh.CustomShorts.Values[0] / 32768f;
+                float v0 = mesh.CustomShorts.Values[1] / 32768f;
+                WorldExporterModSystem.WorldExporterLog($"WriteUVs TopSoil: First UV from CustomShorts: ({u0:F6}, {v0:F6}), raw shorts: ({mesh.CustomShorts.Values[0]}, {mesh.CustomShorts.Values[1]})");
+            }
+
+            for (int i = 0; i < mesh.VerticesCount; i++)
+            {
+                // CustomShorts stores uv2 as short values that need to be converted to floats
+                // The shader unpacks them with: uv2 = uv2In * 2.0 - ...
+                // For export, we'll just use the packed values directly as they should be in atlas coordinates
+                float u = mesh.CustomShorts.Values[i * 2] / 32768f;  // Convert from short to normalized float
+                float v = 1.0f - (mesh.CustomShorts.Values[i * 2 + 1] / 32768f);  // Flip V for OBJ (OpenGL uses bottom-left origin, OBJ uses top-left)
+                writer.WriteLine(FormattableString.Invariant($"vt {u:F6} {v:F6}"));
+            }
+        }
+        // For other passes or if CustomShorts not available, use standard UVs
+        else if (mesh.Uv != null && mesh.Uv.Length >= mesh.VerticesCount * 2)
+        {
+            // Log first few UV values to debug
+            if (mesh.VerticesCount > 0 && !isTopSoil)
+            {
+                WorldExporterModSystem.WorldExporterLog($"WriteUVs Opaque: First UV from mesh.Uv: ({mesh.Uv[0]:F6}, {mesh.Uv[1]:F6})");
+            }
+
             for (int i = 0; i < mesh.VerticesCount; i++)
             {
                 float u = mesh.Uv[i * 2];
-                float v = mesh.Uv[i * 2 + 1];
+                float v = 1.0f - mesh.Uv[i * 2 + 1];  // Flip V for OBJ (OpenGL uses bottom-left origin, OBJ uses top-left)
                 writer.WriteLine(FormattableString.Invariant($"vt {u:F6} {v:F6}"));
             }
         }
         else
         {
+            WorldExporterModSystem.WorldExporterLog($"WriteUVs: No UV data available, using default (0,0)");
             for (int i = 0; i < mesh.VerticesCount; i++)
             {
                 writer.WriteLine("vt 0 0");
@@ -160,21 +203,26 @@ public class OBJExporter : IFormatExporter
         }
     }
 
-    private void WriteMTLFile(string mtlPath)
+    private void WriteMTLFile(string mtlPath, HashSet<int> usedAtlases)
     {
         using var mtlWriter = new StreamWriter(mtlPath);
         mtlWriter.WriteLine("# Material exported by vsworldexporter");
         mtlWriter.WriteLine();
-        mtlWriter.WriteLine("newmtl block_atlas");
-        mtlWriter.WriteLine("Ka 1.000000 1.000000 1.000000");
-        mtlWriter.WriteLine("Kd 1.000000 1.000000 1.000000");
-        mtlWriter.WriteLine("Ks 0.000000 0.000000 0.000000");
-        mtlWriter.WriteLine("d 1.0");
-        mtlWriter.WriteLine("illum 2");
-        mtlWriter.WriteLine("map_Kd textures/block_atlas_0.png");
+
+        foreach (int atlasNum in usedAtlases.OrderBy(x => x))
+        {
+            mtlWriter.WriteLine($"newmtl block_atlas_{atlasNum}");
+            mtlWriter.WriteLine("Ka 1.000000 1.000000 1.000000");
+            mtlWriter.WriteLine("Kd 1.000000 1.000000 1.000000");
+            mtlWriter.WriteLine("Ks 0.000000 0.000000 0.000000");
+            mtlWriter.WriteLine("d 1.0");
+            mtlWriter.WriteLine("illum 2");
+            mtlWriter.WriteLine($"map_Kd block_atlas_{atlasNum}.png");
+            mtlWriter.WriteLine();
+        }
     }
 
-    private void ExportTextureAtlas(string texturesDir, ICoreClientAPI capi)
+    private void ExportTextureAtlas(string exportDir, ICoreClientAPI capi)
     {
         var atlasTextures = capi.BlockTextureAtlas.AtlasTextures;
 
@@ -193,7 +241,7 @@ public class OBJExporter : IFormatExporter
                 continue;
             }
 
-            string atlasPath = Path.Combine(texturesDir, $"block_atlas_{i}.png");
+            string atlasPath = Path.Combine(exportDir, $"block_atlas_{i}.png");
 
             try
             {
