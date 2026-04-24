@@ -17,6 +17,8 @@ namespace WorldExporter
 
         static string logging_prefix = "[WorldExporter]";
 
+        public static float TopSoilGrassLayerOffset = 0.002f; // Configurable z-offset to prevent z-fighting
+
         Config config;
 
         public WorldExporterModSystem()

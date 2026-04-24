@@ -105,17 +105,26 @@ public class TopSoilMeshProcessor
         short packedU = mesh.CustomShorts.Values[vertexIndex * 2];
         short packedV = mesh.CustomShorts.Values[vertexIndex * 2 + 1];
 
-        bool isU2 = (packedU & 1) == 1;
-        bool isV2 = (packedV & 1) == 1;
+        // Treat as unsigned shorts (0-65535) - convert from signed
+        ushort unsignedU = (ushort)packedU;
+        ushort unsignedV = (ushort)packedV;
 
-        float u = (packedU - (isU2 ? 1 : 0)) / 32768.0f;
-        float v = (packedV - (isV2 ? 1 : 0)) / 32768.0f;
+        // Extract LSB flags (matches shader: int(uv2In.x * 0x10000) & 1)
+        bool isU2 = (unsignedU & 1) == 1;
+        bool isV2 = (unsignedV & 1) == 1;
 
+        // Normalize to 0-1 range (as GPU does)
+        float uNormalized = unsignedU / 65536.0f;
+        float vNormalized = unsignedV / 65536.0f;
+
+        // Apply shader transformation: uv2In * 2.0 - padding
         float uvEpsilon = 1.0f / 32768.0f;
-        u = u * 2.0f - (isU2 ? (uvEpsilon + subpixelPaddingX * 2.0f) : 0);
-        v = v * 2.0f - (isV2 ? (uvEpsilon + subpixelPaddingY * 2.0f) : 0);
+        float u = uNormalized * 2.0f - (isU2 ? (uvEpsilon + subpixelPaddingX * 2.0f) : 0);
+        float v = vNormalized * 2.0f - (isV2 ? (uvEpsilon + subpixelPaddingY * 2.0f) : 0);
 
-        if (normalY > 0.5f)
+        // Apply offset for top vs side faces (matches fragment shader: uv2 + vec2(blockTextureSize.x * normal.y, 0))
+        bool isTopFace = normalY > 0.5f;
+        if (isTopFace)
         {
             u += blockTextureSizeX;
         }
@@ -133,6 +142,18 @@ public class TopSoilMeshProcessor
         }
 
         return 0;
+    }
+
+    public Vec3f GetVertexNormal(MeshData mesh, int vertexIndex)
+    {
+        if (mesh.Flags != null && vertexIndex < mesh.Flags.Length)
+        {
+            float[] normal = new float[3];
+            VertexFlags.UnpackNormal(mesh.Flags[vertexIndex], normal);
+            return new Vec3f(normal[0], normal[1], normal[2]);
+        }
+
+        return new Vec3f(0, 1, 0); // Default to up
     }
 
     private bool IsTopFace(float normalY)
