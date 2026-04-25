@@ -230,6 +230,7 @@ public class OBJExporter : IFormatExporter
             mtlWriter.WriteLine("d 1.0");
             mtlWriter.WriteLine("illum 2");
             mtlWriter.WriteLine($"map_Kd block_atlas_{atlasNum}.png");
+            mtlWriter.WriteLine($"map_d block_atlas_{atlasNum}.png");
             mtlWriter.WriteLine();
         }
 
@@ -246,6 +247,7 @@ public class OBJExporter : IFormatExporter
             mtlWriter.WriteLine("d 1.0");
             mtlWriter.WriteLine("illum 2");
             mtlWriter.WriteLine($"map_Kd block_atlas_{atlasNum}.png");
+            mtlWriter.WriteLine($"map_d block_atlas_{atlasNum}.png");
             mtlWriter.WriteLine();
 
             // Grass material (transparent via alpha channel)
