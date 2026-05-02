@@ -370,6 +370,20 @@ public class OBJExporter : IFormatExporter
                 continue;
             }
 
+            // Validate all bounds before writing anything to avoid orphaned OBJ entries
+            bool boundsOk = true;
+            foreach (int vertIdx in face.VertexIndices)
+            {
+                if (vertIdx * 3 + 2 >= mesh.xyz.Length || vertIdx * 2 + 1 >= mesh.Uv.Length)
+                {
+                    WorldExporterModSystem.WorldExporterLog($"ExportTopSoilRenderPass: index {vertIdx} out of bounds, skipping face");
+                    boundsOk = false;
+                    break;
+                }
+            }
+            if (!boundsOk)
+                continue;
+
             Vec3i worldPos = meshWithPos.WorldPosition;
             Vec3f chunkOffset = new Vec3f(
                 (worldPos - exportOrigin.AsVec3i).X,
@@ -380,12 +394,6 @@ public class OBJExporter : IFormatExporter
             // Write 3 vertices (NO offset)
             foreach (int vertIdx in face.VertexIndices)
             {
-                if (vertIdx * 3 + 2 >= mesh.xyz.Length)
-                {
-                    WorldExporterModSystem.WorldExporterLog($"ExportTopSoilRenderPass: Vertex index {vertIdx} out of bounds, skipping face");
-                    goto skipFace;
-                }
-
                 float x = mesh.xyz[vertIdx * 3] + chunkOffset.X;
                 float y = mesh.xyz[vertIdx * 3 + 1] + chunkOffset.Y;
                 float z = mesh.xyz[vertIdx * 3 + 2] + chunkOffset.Z;
@@ -395,12 +403,6 @@ public class OBJExporter : IFormatExporter
             // Write 3 UVs (primary UV from mesh.Uv - soil texture)
             foreach (int vertIdx in face.VertexIndices)
             {
-                if (vertIdx * 2 + 1 >= mesh.Uv.Length)
-                {
-                    WorldExporterModSystem.WorldExporterLog($"ExportTopSoilRenderPass: UV index out of bounds, skipping face");
-                    goto skipFace;
-                }
-
                 float u = mesh.Uv[vertIdx * 2];
                 float v = 1.0f - mesh.Uv[vertIdx * 2 + 1]; // Flip V for OBJ
                 objWriter.WriteLine(FormattableString.Invariant($"vt {u:F6} {v:F6}"));
@@ -420,8 +422,6 @@ public class OBJExporter : IFormatExporter
             objWriter.WriteLine($"f {v0}/{v0}/{v0} {v1}/{v1}/{v1} {v2}/{v2}/{v2}");
 
             vertexIndexBase += 3;
-
-            skipFace:;
         }
 
         // OBJECT 2: Grass overlay layer
@@ -438,13 +438,27 @@ public class OBJExporter : IFormatExporter
             MeshData mesh = meshWithPos.Mesh;
 
             if (mesh.xyz == null || mesh.VerticesCount == 0 || mesh.Uv == null)
-            {
                 continue;
-            }
 
             if (mesh.CustomShorts?.Values == null || mesh.CustomShorts.Values.Length == 0)
             {
                 WorldExporterModSystem.WorldExporterLog("Warning: No CustomShorts UV2 data, skipping grass layer for this mesh");
+                vertexIndexBase += 3; // Still increment to keep indices aligned
+                continue;
+            }
+
+            // Validate all bounds before writing anything to avoid orphaned OBJ entries
+            bool boundsOk = true;
+            foreach (int vertIdx in face.VertexIndices)
+            {
+                if (vertIdx * 3 + 2 >= mesh.xyz.Length || vertIdx * 2 + 1 >= mesh.CustomShorts.Values.Length)
+                {
+                    boundsOk = false;
+                    break;
+                }
+            }
+            if (!boundsOk)
+            {
                 vertexIndexBase += 3; // Still increment to keep indices aligned
                 continue;
             }
@@ -463,11 +477,6 @@ public class OBJExporter : IFormatExporter
             // Write 3 vertices (WITH offset to prevent z-fighting)
             foreach (int vertIdx in face.VertexIndices)
             {
-                if (vertIdx * 3 + 2 >= mesh.xyz.Length)
-                {
-                    goto skipGrassFace;
-                }
-
                 float x = mesh.xyz[vertIdx * 3] + chunkOffset.X + offset.X;
                 float y = mesh.xyz[vertIdx * 3 + 1] + chunkOffset.Y + offset.Y;
                 float z = mesh.xyz[vertIdx * 3 + 2] + chunkOffset.Z + offset.Z;
@@ -496,8 +505,6 @@ public class OBJExporter : IFormatExporter
             objWriter.WriteLine($"f {v0}/{v0}/{v0} {v1}/{v1}/{v1} {v2}/{v2}/{v2}");
 
             vertexIndexBase += 3;
-
-            skipGrassFace:;
         }
 
         objWriter.WriteLine();
