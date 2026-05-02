@@ -283,10 +283,21 @@ public class ChunkMeshCollector
 
             WorldExporterModSystem.WorldExporterLog($"      Part {partIndex}: LOD0 vertices={meshLod0?.VerticesCount ?? 0}, LOD1 vertices={meshLod1?.VerticesCount ?? 0}, LOD2Near vertices={meshLod2Near?.VerticesCount ?? 0}, LOD2Far vertices={meshLod2Far?.VerticesCount ?? 0}");
 
-            // LOD0 (close-up detail) and LOD1 (everywhere blocks) contain different blocks,
-            // so add both as separate list entries — no allocation, no copying, no data loss.
-            // Skip LOD2/3 as they are simplified distant versions.
-            bool hasAnyMesh = (meshLod0 != null && meshLod0.VerticesCount > 0) || (meshLod1 != null && meshLod1.VerticesCount > 0);
+            // The engine keeps 4 separate GPU buffers per chunk part for efficient LOD switching:
+            //   Lod0      - special close-up detail (blocks with lod0shape, not surrounded)
+            //   Lod1      - regular blocks with NO lod2shape (same mesh at all distances)
+            //   Lod2Near  - full-detail mesh for blocks that HAVE a lod2shape
+            //   Lod2Far   - simplified mesh for those same blocks, shown only at far distance
+            //
+            // At close/medium distance the game draws: Lod0 + Lod1 + Lod2Near
+            // At far (Lod2Far) distance it draws:      Lod1 + Lod2Far
+            //   (Lod2Near is swapped for Lod2Far — swapping one buffer is cheaper than rebuilding)
+            //
+            // Lod1 and Lod2Near are the same detail level, kept separate only for that buffer swap.
+            // For export we want maximum detail: include all three, skip only Lod2Far (simplified).
+            bool hasAnyMesh = (meshLod0 != null && meshLod0.VerticesCount > 0)
+                           || (meshLod1 != null && meshLod1.VerticesCount > 0)
+                           || (meshLod2Near != null && meshLod2Near.VerticesCount > 0);
             if (!hasAnyMesh)
             {
                 WorldExporterModSystem.WorldExporterLog($"      Part {partIndex}: No mesh data at any LOD level");
@@ -303,6 +314,8 @@ public class ChunkMeshCollector
                 output[pass].Add(new MeshDataWithPosition { Mesh = meshLod0.Clone(), WorldPosition = worldPos, AtlasNumber = atlasNumber });
             if (meshLod1 != null && meshLod1.VerticesCount > 0)
                 output[pass].Add(new MeshDataWithPosition { Mesh = meshLod1.Clone(), WorldPosition = worldPos, AtlasNumber = atlasNumber });
+            if (meshLod2Near != null && meshLod2Near.VerticesCount > 0)
+                output[pass].Add(new MeshDataWithPosition { Mesh = meshLod2Near.Clone(), WorldPosition = worldPos, AtlasNumber = atlasNumber });
 
             partIndex++;
         }
