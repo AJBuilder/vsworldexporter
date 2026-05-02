@@ -170,46 +170,44 @@ namespace WorldExporter
                             return TextCommandResult.Success();
                         })
                     .EndSubCommand()
-                    .BeginSubCommand("cube")
-                        .BeginSubCommand("around")
-                            .WithDescription("Exports a cube of the specified x/y/z lengths around the given position. Optional format: stl (default) or obj.")
-                            .WithArgs(new ICommandArgumentParser[] {
-                                new WorldPositionArgParser("center", api, true),
-                                new IntArgParser("x", 10, false),
-                                new IntArgParser("y", 10, false),
-                                new IntArgParser("z", 10, false),
-                                new WordArgParser("format", false)})
-                            .RequiresPrivilege(Privilege.chat)
-                            .HandleWith((args) =>
-                            {
-                                BlockPos center = new BlockPos(((Vec3d)args[0]).AsVec3i, args.Caller.Entity.Pos.Dimension);
-                                int x = (int)args[1];
-                                int y = (int)args[2];
-                                int z = (int)args[3];
-                                string format = args[4] as string ?? "stl";
-                                ExportCuboid((IClientWorldAccessor)args.Caller.Entity.World, center, x, y, z, format);
-                                return TextCommandResult.Success();
-                            })
-                        .EndSubCommand()
-                        .BeginSubCommand("within")
-                            .WithDescription("Exports a cube with the specified start/end coordinates. Optional format: stl (default) or obj.")
-                            .WithArgs(new ICommandArgumentParser[] {
-                                new WorldPositionArgParser("start", api, true),
-                                new WorldPositionArgParser("end", api, true),
-                                new WordArgParser("format", false)})
-                            .RequiresPrivilege(Privilege.chat)
-                            .HandleWith((args) =>
-                            {
-                                Vec3d start = (Vec3d)args[0];
-                                Vec3d end = (Vec3d)args[1];
-                                string format = args[2] as string ?? "stl";
-                                ExportCuboid((IClientWorldAccessor)args.Caller.Entity.World,
-                                             new BlockPos(start.AsVec3i, args.Caller.Entity.Pos.Dimension),
-                                             new BlockPos(end.AsVec3i, args.Caller.Entity.Pos.Dimension),
-                                             format);
-                                return TextCommandResult.Success();
-                            })
-                        .EndSubCommand()
+                    .BeginSubCommand("around")
+                        .WithDescription("Exports a cube of the specified x/y/z lengths around the given position. Optional format: stl (default) or obj.")
+                        .WithArgs(new ICommandArgumentParser[] {
+                            new WorldPositionArgParser("center", api, true),
+                            new IntArgParser("x", 10, false),
+                            new IntArgParser("y", 10, false),
+                            new IntArgParser("z", 10, false),
+                            new WordArgParser("format", false)})
+                        .RequiresPrivilege(Privilege.chat)
+                        .HandleWith((args) =>
+                        {
+                            BlockPos center = new BlockPos(((Vec3d)args[0]).AsVec3i, args.Caller.Entity.Pos.Dimension);
+                            int x = (int)args[1];
+                            int y = (int)args[2];
+                            int z = (int)args[3];
+                            string format = args[4] as string ?? "stl";
+                            ExportCuboid((IClientWorldAccessor)args.Caller.Entity.World, center, x, y, z, format);
+                            return TextCommandResult.Success();
+                        })
+                    .EndSubCommand()
+                    .BeginSubCommand("within")
+                        .WithDescription("Exports a cube with the specified start/end coordinates. Optional format: stl (default) or obj.")
+                        .WithArgs(new ICommandArgumentParser[] {
+                            new WorldPositionArgParser("start", api, true),
+                            new WorldPositionArgParser("end", api, true),
+                            new WordArgParser("format", false)})
+                        .RequiresPrivilege(Privilege.chat)
+                        .HandleWith((args) =>
+                        {
+                            Vec3d start = (Vec3d)args[0];
+                            Vec3d end = (Vec3d)args[1];
+                            string format = args[2] as string ?? "stl";
+                            ExportCuboid((IClientWorldAccessor)args.Caller.Entity.World,
+                                         new BlockPos(start.AsVec3i, args.Caller.Entity.Pos.Dimension),
+                                         new BlockPos(end.AsVec3i, args.Caller.Entity.Pos.Dimension),
+                                         format);
+                            return TextCommandResult.Success();
+                        })
                     .EndSubCommand()
                 .EndSubCommand()
                     .BeginSubCommand("directory")
