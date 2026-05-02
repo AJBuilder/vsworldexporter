@@ -283,35 +283,26 @@ public class ChunkMeshCollector
 
             WorldExporterModSystem.WorldExporterLog($"      Part {partIndex}: LOD0 vertices={meshLod0?.VerticesCount ?? 0}, LOD1 vertices={meshLod1?.VerticesCount ?? 0}, LOD2Near vertices={meshLod2Near?.VerticesCount ?? 0}, LOD2Far vertices={meshLod2Far?.VerticesCount ?? 0}");
 
-            // Use LOD0 if available (highest detail), otherwise try other LODs
-            MeshData mesh = meshLod0 ?? meshLod1 ?? meshLod2Near ?? meshLod2Far;
-
-            if (mesh == null || mesh.VerticesCount == 0)
+            // LOD0 (close-up detail) and LOD1 (everywhere blocks) contain different blocks,
+            // so add both as separate list entries — no allocation, no copying, no data loss.
+            // Skip LOD2/3 as they are simplified distant versions.
+            bool hasAnyMesh = (meshLod0 != null && meshLod0.VerticesCount > 0) || (meshLod1 != null && meshLod1.VerticesCount > 0);
+            if (!hasAnyMesh)
             {
                 WorldExporterModSystem.WorldExporterLog($"      Part {partIndex}: No mesh data at any LOD level");
                 partIndex++;
                 continue;
             }
 
-            WorldExporterModSystem.WorldExporterLog($"      Part {partIndex}: Using mesh with {mesh.VerticesCount} vertices");
-
             if (!output.ContainsKey(pass))
-            {
                 output[pass] = new List<MeshDataWithPosition>();
-            }
 
             int atlasNumber = (int)atlasField.GetValue(part);
 
-            WorldExporterModSystem.WorldExporterLog($"      Part {partIndex}: adding mesh with {mesh.VerticesCount} vertices to pass {pass}");
-            WorldExporterModSystem.WorldExporterLog($"      Part {partIndex}: atlasNumber={atlasNumber}, TextureIds.Length={mesh.TextureIds?.Length ?? 0}, TextureIndices.Length={mesh.TextureIndices?.Length ?? 0}");
-            WorldExporterModSystem.WorldExporterLog($"      Part {partIndex}: Uv.Length={mesh.Uv?.Length ?? 0}, CustomShorts={mesh.CustomShorts?.Values?.Length ?? 0}");
-
-            output[pass].Add(new MeshDataWithPosition
-            {
-                Mesh = mesh.Clone(),
-                WorldPosition = worldPos,
-                AtlasNumber = atlasNumber
-            });
+            if (meshLod0 != null && meshLod0.VerticesCount > 0)
+                output[pass].Add(new MeshDataWithPosition { Mesh = meshLod0.Clone(), WorldPosition = worldPos, AtlasNumber = atlasNumber });
+            if (meshLod1 != null && meshLod1.VerticesCount > 0)
+                output[pass].Add(new MeshDataWithPosition { Mesh = meshLod1.Clone(), WorldPosition = worldPos, AtlasNumber = atlasNumber });
 
             partIndex++;
         }
