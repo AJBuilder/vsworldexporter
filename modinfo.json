@@ -6,9 +6,9 @@
     "_Durus_"
   ],
   "description": "Exports world regions to STL and OBJ formats with multi-render-pass support. Properly exports grassy dirt, water, glass, and other multi-texture blocks.",
-  "version": "0.3.1a",
+  "version": "0.3.2",
   "dependencies": {
-    "game": "1.22.0"
+    "game": "1.22"
   },
   "side":  "client"
 }

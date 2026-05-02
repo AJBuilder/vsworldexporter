@@ -4,7 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <ModInfoFile>modinfo.json</ModInfoFile>
     <ModName>WorldExporter</ModName>
-    <Version>0.3.1-a</Version>
+    <Version>0.3.2</Version>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <OutputPath>bin/$(Configuration)/Mods/$(ModName)/</OutputPath>
     <ZipOutputPath>bin/$(Configuration)/Mods/$(ModName)-v$(Version).zip</ZipOutputPath>
